@@ -234,8 +234,16 @@ class ModelClient:
                                 content = reasoning
                             logger.info(f"Extracted content from reasoning: {len(content)} chars")
                     elif not content and "reasoning" in message:
-                        # Older reasoning format
-                        logger.warning("Qwen response in reasoning mode - content may be truncated")
+                        # Older reasoning format - also try to extract content
+                        reasoning = message.get("reasoning", "")
+                        logger.warning(f"Qwen reasoning mode (legacy) - reasoning: {len(reasoning)} chars")
+                        if reasoning:
+                            # Extract answer from reasoning if it has </think> pattern
+                            if "</think>" in reasoning:
+                                content = reasoning.split("</think>")[-1].strip()
+                            else:
+                                content = reasoning
+                            logger.info(f"Extracted content from legacy reasoning: {len(content)} chars")
 
                     usage = data.get("usage", {})
 

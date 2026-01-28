@@ -134,6 +134,9 @@ class GridMarketMakerLive:
         self.no_fill_alert_threshold_seconds = 1800  # Alert if 0 fills for 30 minutes
         self.no_fill_alert_triggered = False
 
+        # v20: Real fill tracking via fetch_fills API (replaces broken vanished-order detection)
+        self.last_fill_id = None  # Track last seen fill ID
+
         # Position tracking
         self.position_size = 0.0
         self.position_notional = 0.0
@@ -364,9 +367,7 @@ class GridMarketMakerLive:
 
         # NP-002: Apply tight spread reduction in calm markets
         if self.tight_spread_mode and abs_roc < self.tight_spread_exit_threshold_bps:
-            original_spread = spread
             spread = spread * (1 - self.tight_spread_reduction_pct)
-            logger.info(f"  📉 TIGHT_SPREAD mode: spread reduced to {spread:.1f}bps (from {original_spread:.1f}bps)")
 
         return spread
 
@@ -611,7 +612,7 @@ class GridMarketMakerLive:
                     else:
                         logger.warning(f"BUY order rejected: {result}"[:100])
                 except Exception as e:
-                    logger.warning(f"BUY error L{i}: size={size_dec} price={price_dec}: {e}"[:100])
+                    logger.warning(f"BUY error L{i}: size={size_dec} price={price_dec}: {e}"[:150])
 
         # Place SELL orders (above mid) - skip if paused
         if not (self.orders_paused and self.pause_side == 'SELL') and sell_mult > 0:
@@ -665,7 +666,7 @@ class GridMarketMakerLive:
                     else:
                         logger.warning(f"SELL order rejected: {result}"[:100])
                 except Exception as e:
-                    logger.warning(f"SELL error L{i}: size={size_dec} price={price_dec}: {e}"[:100])
+                    logger.warning(f"SELL error L{i}: size={size_dec} price={price_dec}: {e}"[:150])
 
         self.grid_center = mid_price
         if orders_placed > 0:
@@ -700,42 +701,64 @@ class GridMarketMakerLive:
         return self.fills_count / elapsed_hours
 
     def _check_fills(self) -> int:
-        """Check for filled orders and update stats. Also sync open_orders with exchange."""
+        """Check for filled orders using fetch_fills API (v20 - real exchange data).
+
+        Queries the Paradex fills endpoint for actual fill records instead of
+        guessing fills from vanished orders.
+        """
         fills = 0
         try:
+            # Query real fills from exchange
+            fill_data = self.client.api_client.fetch_fills(params={'market': self.symbol})
+
+            if fill_data and fill_data.get('results'):
+                new_fills = []
+
+                if self.last_fill_id is None:
+                    # First check - record the latest fill ID, don't count historical
+                    if fill_data['results']:
+                        self.last_fill_id = fill_data['results'][0].get('id')
+                        logger.info(f"  Fill tracking initialized (latest id: {self.last_fill_id})")
+                else:
+                    # Find fills newer than last seen
+                    for f in fill_data['results']:
+                        fid = f.get('id')
+                        if fid == self.last_fill_id:
+                            break  # Reached last seen fill
+                        new_fills.append(f)
+
+                    if new_fills:
+                        self.last_fill_id = new_fills[0].get('id')
+
+                for f in new_fills:
+                    price = float(f.get('price', 0))
+                    size = float(f.get('size', 0))
+                    fee = float(f.get('fee', 0))
+                    side = f.get('side', '?')
+                    liquidity = f.get('liquidity', '?')
+                    realized_pnl = float(f.get('realized_pnl', 0))
+
+                    notional = price * size
+                    self.total_volume += notional
+                    self.fills_count += 1
+                    self.realized_pnl += realized_pnl
+                    fills += 1
+
+                    self.last_fill_time = datetime.now()
+                    self.no_fill_alert_triggered = False
+
+                    logger.info(f"  FILL: {side} {size:.6f} @ ${price:,.2f} (${notional:,.2f}) fee=${fee:.4f} {liquidity} pnl=${realized_pnl:.4f}")
+
+            # Sync open_orders: remove stale entries (but do NOT count as fills)
             orders = self.client.api_client.fetch_orders(params={'market': self.symbol})
             exchange_order_ids = set()
-
             if orders and orders.get('results'):
                 for order in orders['results']:
-                    order_id = order.get('id')
-                    status = order.get('status')
+                    if order.get('status') in ['NEW', 'OPEN', 'UNTRIGGERED']:
+                        exchange_order_ids.add(order.get('id'))
 
-                    # Track active orders on exchange
-                    if status in ['NEW', 'OPEN', 'UNTRIGGERED']:
-                        exchange_order_ids.add(order_id)
-
-                    if order_id in self.open_orders and status == 'CLOSED':
-                        # Order filled!
-                        info = self.open_orders[order_id]
-                        filled_size = float(order.get('filled_size', 0))
-                        fill_price = float(order.get('avg_fill_price', info['price']))
-
-                        notional = filled_size * fill_price
-                        self.total_volume += notional
-                        self.fills_count += 1
-                        fills += 1
-
-                        # NP-004: Track last fill time
-                        self.last_fill_time = datetime.now()
-                        self.no_fill_alert_triggered = False
-
-                        logger.info(f"  FILL: {info['side']} {filled_size:.6f} @ ${fill_price:,.2f} (${notional:,.2f})")
-                        del self.open_orders[order_id]
-
-            # Sync: remove tracked orders that no longer exist on exchange
-            stale_orders = [oid for oid in self.open_orders if oid not in exchange_order_ids]
-            for oid in stale_orders:
+            stale = [oid for oid in self.open_orders if oid not in exchange_order_ids]
+            for oid in stale:
                 del self.open_orders[oid]
 
         except Exception as e:
@@ -820,7 +843,6 @@ class GridMarketMakerLive:
                 should_refresh = (
                     fills > 0 or
                     price_move_pct >= grid_reset_pct or  # 0.5% price move (v10 behavior)
-                    inventory_ratio > 0.8 or  # Inventory force reset at 80%
                     (no_tracked_orders and not_fully_paused) or  # Re-place if orders disappeared
                     time_based_refresh or  # v15: Refresh every 5 minutes regardless of price/fills
                     stale_order_refresh  # v16: Refresh if orders are stale
@@ -832,8 +854,6 @@ class GridMarketMakerLive:
                         logger.info(f"  Stale order refresh: order at ${stale_price:,.2f} is {stale_dist:.2f}% from mid")
                     elif price_move_pct >= grid_reset_pct:
                         logger.info(f"  Grid reset: price moved {price_move_pct:.3f}%")
-                    elif inventory_ratio > 0.8:
-                        logger.info(f"  Grid reset: inventory at {inventory_ratio*100:.0f}%")
                     elif no_tracked_orders and not_fully_paused:
                         logger.info(f"  Grid reset: no active orders, re-placing grid")
                     elif time_based_refresh:
@@ -946,12 +966,12 @@ def main():
     """
     mm = GridMarketMakerLive(
         symbol="BTC-USD-PERP",
-        base_spread_bps=8.0,        # v11: 8 bps (15 too wide) per Qwen
-        order_size_usd=100.0,       # $100 per order
+        base_spread_bps=1.5,        # v19: tight calm spread for fills
+        order_size_usd=40.0,        # $40 per order (must be < balance for inventory check)
         num_levels=2,               # 2 levels per side
         duration_minutes=525600,    # Run indefinitely (1 year)
-        max_inventory_pct=100.0,    # v10: lower leverage
-        capital=105.0,              # $105 account
+        max_inventory_pct=200.0,    # Allow leveraged positions
+        capital=91.0,               # ~$91 account balance
         roc_threshold_bps=50.0,     # v10: real trends only per Qwen
         min_pause_duration=300,     # v10: 5 min pause per Qwen
     )

@@ -95,6 +95,9 @@ class GridMarketMakerExtended:
         self.total_volume = 0.0
         self.open_order_ids = []
 
+        # v20: Real fill tracking via get_trades API (replaces broken vanished-order detection)
+        self.last_trade_id = None
+
         # Market config
         config = MARKET_CONFIG.get(symbol, MARKET_CONFIG["BTC-USD"])
         self.amount_precision = config["amount_precision"]
@@ -388,23 +391,60 @@ class GridMarketMakerExtended:
         return False
 
     async def _check_fills(self):
-        """Check if any orders have been filled since last check."""
+        """Check for fills using get_trades API (v20 - real exchange data).
+
+        Queries the x10 trades endpoint for actual fill records instead of
+        guessing fills from vanished orders.
+        """
         try:
+            trades_resp = await self.client.account.get_trades(
+                market_names=[self.symbol], limit=50
+            )
+
+            if not trades_resp or not trades_resp.data:
+                return
+
+            trades = trades_resp.data
+
+            if self.last_trade_id is None:
+                # First check - record the latest trade ID, don't count historical
+                if trades:
+                    self.last_trade_id = trades[0].id
+                    logger.info(f"  Fill tracking initialized (latest id: {self.last_trade_id})")
+                return
+
+            # Find trades newer than last seen
+            new_trades = []
+            for t in trades:
+                if t.id == self.last_trade_id:
+                    break
+                new_trades.append(t)
+
+            if new_trades:
+                self.last_trade_id = new_trades[0].id
+
+                for t in new_trades:
+                    price = float(t.price)
+                    qty = float(t.qty)
+                    value = float(t.value)
+                    fee = float(t.fee)
+                    side = t.side
+                    is_taker = t.is_taker
+
+                    self.total_fills += 1
+                    self.total_volume += value
+
+                    logger.info(f"  FILL: {side} {qty:.6f} @ ${price:,.2f} (${value:,.2f}) fee=${fee:.4f} {'TAKER' if is_taker else 'MAKER'}")
+
+            # Update open_order_ids for grid refresh logic
             open_orders = await self.client.account.get_open_orders(
                 market_names=[self.symbol]
             )
             if open_orders and open_orders.data:
-                current_ids = {o.id for o in open_orders.data}
-                # Count orders that disappeared (filled or cancelled)
-                if self.open_order_ids:
-                    prev_ids = set(self.open_order_ids)
-                    filled = prev_ids - current_ids
-                    if filled:
-                        self.total_fills += len(filled)
-                        fill_volume = len(filled) * self.order_size_usd
-                        self.total_volume += fill_volume
-                        logger.info(f"  🎯 {len(filled)} fills detected! (+${fill_volume:.0f} volume)")
-                self.open_order_ids = list(current_ids)
+                self.open_order_ids = [o.id for o in open_orders.data]
+            else:
+                self.open_order_ids = []
+
         except Exception as e:
             logger.error(f"Error checking fills: {e}")
 

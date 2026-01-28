@@ -42,7 +42,8 @@ class HibachiTradeExecutor:
         max_positions: int = 5,  # Reduced from 10 to force selectivity
         min_confidence: float = 0.7,  # v7: Raised from 0.6 (Qwen recommendation)
         max_position_age_minutes: int = 240,  # 4 hours (same as Lighter)
-        cambrian_api_key: str = None  # For risk engine
+        cambrian_api_key: str = None,  # For risk engine
+        maker_only: bool = True  # Use limit orders to avoid taker fees
     ):
         self.sdk = hibachi_sdk
         self.tracker = trade_tracker
@@ -51,10 +52,12 @@ class HibachiTradeExecutor:
         self.max_positions = max_positions
         self.min_confidence = min_confidence
         self.max_position_age_minutes = max_position_age_minutes
+        self.maker_only = maker_only
 
-        # Hibachi fee rate (taker fee ~0.035% per trade)
-        # Round-trip = entry + exit = ~0.07% total
-        self.fee_rate = 0.00035  # 0.035% per transaction
+        # Hibachi fee rate
+        # Maker: ~0% (or rebates), Taker: ~0.035% per trade
+        # With maker_only=True, we pay $0 in fees
+        self.fee_rate = 0.0 if maker_only else 0.00035
 
         # Initialize Cambrian Risk Engine
         self.risk_engine = None
@@ -66,7 +69,53 @@ class HibachiTradeExecutor:
                 logger.warning(f"⚠️ Could not initialize risk engine: {e}")
 
         mode = "DRY-RUN" if dry_run else "LIVE"
-        logger.info(f"✅ HibachiTradeExecutor initialized ({mode} mode, ${default_position_size}/trade, Max Age: {max_position_age_minutes}min)")
+        fee_mode = "MAKER-ONLY (0 fees)" if maker_only else "TAKER (0.035%)"
+        logger.info(f"✅ HibachiTradeExecutor initialized ({mode} mode, {fee_mode}, ${default_position_size}/trade, Max Age: {max_position_age_minutes}min)")
+
+    async def _get_aggressive_limit_price(self, symbol: str, is_buy: bool) -> Optional[float]:
+        """
+        Get aggressive limit price that should fill quickly while being maker.
+
+        For BUY: Use best bid + small offset (sits at top of bid)
+        For SELL: Use best ask - small offset (sits at top of ask)
+
+        This places us inside the spread as a maker, but aggressive enough to fill.
+        """
+        try:
+            orderbook = await self.sdk.get_orderbook(symbol)
+            if not orderbook:
+                # Fallback to mid price
+                return await self.sdk.get_price(symbol)
+
+            bids = orderbook.get('bids', [])
+            asks = orderbook.get('asks', [])
+
+            if not bids or not asks:
+                return await self.sdk.get_price(symbol)
+
+            best_bid = float(bids[0][0]) if bids else 0
+            best_ask = float(asks[0][0]) if asks else 0
+
+            if best_bid == 0 or best_ask == 0:
+                return await self.sdk.get_price(symbol)
+
+            spread = best_ask - best_bid
+            mid = (best_bid + best_ask) / 2
+
+            # Place order inside spread (maker) but aggressive
+            # For BUY: bid + 40% of spread (closer to mid, will fill on small dip)
+            # For SELL: ask - 40% of spread (closer to mid, will fill on small rally)
+            if is_buy:
+                price = best_bid + (spread * 0.4)
+            else:
+                price = best_ask - (spread * 0.4)
+
+            logger.debug(f"[MAKER] {symbol} bid={best_bid:.2f} ask={best_ask:.2f} → {'BUY' if is_buy else 'SELL'} @ {price:.2f}")
+            return price
+
+        except Exception as e:
+            logger.warning(f"Error getting aggressive limit price: {e}")
+            return await self.sdk.get_price(symbol)
 
     async def _fetch_account_balance(self) -> Optional[float]:
         """Fetch account balance from Hibachi API"""
@@ -223,44 +272,38 @@ class HibachiTradeExecutor:
                     'error': 'Cannot get price'
                 }
 
-            # DYNAMIC LEVERAGE SYSTEM (v6 - Aggressive sizing 2025-12-05)
-            # Key insight: Perps allow notional > account balance
-            # Higher confidence = higher leverage = MUCH bigger bets on strong setups
-            # Extended bot uses $500-600 positions - we should too
+            # CONSERVATIVE LEVERAGE SYSTEM (v8 - Match Extended 2026-01-20)
+            # Previous v7 used 10-15x leverage causing state sync issues
+            # Extended uses 3-5x and has fewer problems
             confidence = decision.get('confidence', 0.5) if decision else 0.5
             account_balance = await self._fetch_account_balance()
 
-            # Aggressive leverage tiers (v6 - based on Lighter analysis)
-            # Note: 0.8+ confidence underperforms on Lighter - cap leverage there
-            # | Confidence | Leverage | Base% | Example ($70 acct) |
+            # Conservative leverage tiers (v8 - match Extended executor)
+            # | Confidence | Leverage | Base% | Example ($55 acct) |
             # |------------|----------|-------|-------------------|
-            # | <0.6       | REJECT   | -     | Filtered          |
-            # | 0.6-0.7    | 4x       | 50%   | $140 notional     |
-            # | 0.7-0.8    | 6x       | 60%   | $252 notional     |
-            # | 0.8-0.9    | 5x       | 50%   | $175 notional     | ← Reduced! Overconf trap
-            # | 0.9+       | 4x       | 40%   | $112 notional     | ← Most reduced!
+            # | <0.5       | 3.0x     | 80%   | $132 notional     |
+            # | 0.5-0.7    | 3.5x     | 80%   | $154 notional     |
+            # | 0.7-0.85   | 4.0x     | 80%   | $176 notional     |
+            # | 0.85+      | 5.0x     | 80%   | $220 notional     |
+
+            BASE_LEVERAGE = 3.0
+            MAX_LEVERAGE = 5.0
 
             if account_balance and account_balance > 1.0:
-                # Confidence-based leverage scaling (min confidence 0.6 enforced by fee filter)
-                # NOTE: Based on Lighter data, 0.8+ confidence UNDERPERFORMS
-                # We scale DOWN leverage for highest confidence (overconfidence trap)
-                if confidence < 0.7:
-                    leverage = 4.0   # Decent setup - solid bet
-                    base_pct = 0.50  # 50% of account
-                elif confidence < 0.8:
-                    leverage = 6.0   # Sweet spot! Best WR on Lighter
-                    base_pct = 0.60  # 60% of account - max aggression
-                elif confidence < 0.9:
-                    leverage = 5.0   # High conf but risky - dial back
-                    base_pct = 0.50  # 50% - more cautious
+                # Confidence-based leverage scaling (conservative, matches Extended)
+                if confidence < 0.5:
+                    leverage = BASE_LEVERAGE
+                elif confidence < 0.7:
+                    leverage = BASE_LEVERAGE + 0.5
+                elif confidence < 0.85:
+                    leverage = BASE_LEVERAGE + 1.0
                 else:
-                    leverage = 4.0   # Very high conf = overconfidence trap
-                    base_pct = 0.40  # 40% - be careful here
+                    leverage = MAX_LEVERAGE
 
+                base_pct = 0.80  # 80% of account (same as Extended)
                 position_size_usd = account_balance * base_pct * leverage
 
-                # Minimum $100 notional, maximum $1000 notional per position
-                # (Risk engine will block if liquidation risk too high)
+                # Min $100, max $1000 (same as Extended)
                 min_size = 100.0
                 max_size = 1000.0
                 position_size_usd = max(min_size, min(position_size_usd, max_size))
@@ -395,7 +438,17 @@ class HibachiTradeExecutor:
             position_before = await self.sdk.get_position_size(symbol)
 
             for attempt in range(max_retries + 1):
-                order = await self.sdk.create_market_order(symbol, is_buy, current_amount)
+                # MAKER-ONLY: Use limit orders to avoid taker fees
+                if self.maker_only:
+                    limit_price = await self._get_aggressive_limit_price(symbol, is_buy)
+                    if limit_price:
+                        logger.info(f"📝 [MAKER] Placing limit order @ ${limit_price:.2f}")
+                        order = await self.sdk.create_limit_order(symbol, is_buy, current_amount, limit_price)
+                    else:
+                        logger.warning("Could not get limit price, falling back to market order")
+                        order = await self.sdk.create_market_order(symbol, is_buy, current_amount)
+                else:
+                    order = await self.sdk.create_market_order(symbol, is_buy, current_amount)
 
                 # Check for error response (SDK now returns {'error': msg} instead of None)
                 if order and isinstance(order, dict) and 'error' in order:
@@ -637,8 +690,17 @@ class HibachiTradeExecutor:
                     'dry_run': True
                 }
 
-            # Execute real close order
-            order = await self.sdk.create_market_order(symbol, is_buy, quantity)
+            # Execute real close order - MAKER-ONLY to avoid fees
+            if self.maker_only:
+                limit_price = await self._get_aggressive_limit_price(symbol, is_buy)
+                if limit_price:
+                    logger.info(f"📝 [MAKER] Closing with limit order @ ${limit_price:.2f}")
+                    order = await self.sdk.create_limit_order(symbol, is_buy, quantity, limit_price)
+                else:
+                    logger.warning("Could not get limit price for close, using market order")
+                    order = await self.sdk.create_market_order(symbol, is_buy, quantity)
+            else:
+                order = await self.sdk.create_market_order(symbol, is_buy, quantity)
 
             if order:
                 logger.info(f"✅ Position closed: {order}")

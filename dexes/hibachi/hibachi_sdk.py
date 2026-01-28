@@ -561,6 +561,9 @@ class HibachiSDK:
         """
         Create a limit order using binary buffer signature
 
+        Note: POST_ONLY (ALO) is documented in Hibachi conceptual docs but not exposed
+        in the API. Use wide spreads (15-20 bps) to ensure orders rest on book.
+
         Args:
             symbol: Market symbol (e.g., "BTC/USDT-P")
             is_buy: True for buy, False for sell
@@ -676,15 +679,20 @@ class HibachiSDK:
                 logger.error("Cannot cancel order: account ID not set. Use set_account_id() or pass to constructor.")
                 return False
 
+            # Per Hibachi docs: Cancel signature is orderId as 64-bit big-endian integer
+            # "If you are using orderId, the payload will be the orderId as a 64-bit integer"
+            order_id_int = int(order_id)
+            cancel_buffer = struct.pack('>Q', order_id_int)  # 8 bytes big-endian
+            signature = self._sign_order_buffer(cancel_buffer)
+
             cancel_data = {
-                "accountId": int(account_id),  # Convert to integer
-                "orderId": order_id
+                "accountId": int(account_id),
+                "orderId": order_id,
+                "signature": signature
             }
 
-            # WRITE operation requires HMAC signing
+            headers = self._get_headers()
             endpoint = "/trade/order"
-            headers = self._sign_request("DELETE", endpoint, cancel_data)
-
             url = f"{self.base_url}{endpoint}"
 
             async with aiohttp.ClientSession() as session:
@@ -700,6 +708,38 @@ class HibachiSDK:
         except Exception as e:
             logger.error(f"Error canceling order: {e}")
             return False
+
+    async def cancel_all_orders(self, symbol: Optional[str] = None) -> int:
+        """
+        Cancel all open orders, optionally for a specific symbol
+
+        Args:
+            symbol: Optional symbol filter (e.g., "BTC/USDT-P")
+
+        Returns:
+            Number of orders cancelled
+        """
+        try:
+            orders = await self.get_orders(symbol)
+            # Hibachi uses 'PLACED' status for open orders, not 'OPEN'
+            open_orders = [o for o in orders if o.get('status') in ['OPEN', 'PLACED']]
+
+            if not open_orders:
+                return 0
+
+            cancelled = 0
+            for order in open_orders:
+                order_id = order.get('orderId')
+                if order_id:
+                    if await self.cancel_order(str(order_id)):
+                        cancelled += 1
+
+            logger.info(f"Cancelled {cancelled}/{len(open_orders)} orders")
+            return cancelled
+
+        except Exception as e:
+            logger.error(f"Error cancelling all orders: {e}")
+            return 0
 
     async def get_orders(self, symbol: Optional[str] = None) -> List[Dict]:
         """

@@ -39,10 +39,12 @@
 
 | Document | Purpose |
 |----------|---------|
+| [LEARNINGS.md](LEARNINGS.md) | **Central learnings log** (update after every discovery) |
+| [PROGRESS.md](PROGRESS.md) | Current bot status and configurations |
 | [Project_Analysis.md](Project_Analysis.md) | Trade data, strategy iterations, what works |
 | [README.md](README.md) | Project overview and quick start |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | For colleagues contributing code |
-| [research/Learnings.md](research/Learnings.md) | Strategy learnings |
+| [research/Learnings.md](research/Learnings.md) | Detailed strategy history |
 
 ---
 
@@ -133,10 +135,51 @@ hopium-agents/
 - Never provide time estimates in responses
 - Focus on what needs to be done, not how long it might take
 
+**CRITICAL - P&L AND ACCOUNT DATA**:
+- NEVER trust dashboard scripts, log aggregations, or local tracking for P&L
+- ALWAYS query the exchange API directly for balance, positions, and P&L
+- Local tracking has been wrong repeatedly - the exchange is the source of truth
+- When reporting account status, ALWAYS call the exchange SDK first:
+```python
+# Hibachi example - ALWAYS use this pattern
+from dexes.hibachi.hibachi_sdk import HibachiSDK
+sdk = HibachiSDK(api_key, api_secret, account_id)
+balance = await sdk.get_balance()  # Real balance
+positions = await sdk.get_positions()  # Real positions
+```
+- NEVER say "+$X profit" without first querying the exchange
+- If a dashboard or script shows P&L, VERIFY IT against exchange data
+
 **CRITICAL - Blockchain Addresses**:
 - NEVER truncate or abbreviate addresses (e.g., "0x023a...")
 - ALWAYS use complete, full-length addresses when querying APIs
 - Partial addresses return incorrect/empty data
+
+---
+
+## Mandatory Documentation Updates
+
+**LEARNINGS.md** - Update when:
+- A strategy parameter change is tested (document results)
+- A bug is discovered and fixed (document root cause)
+- Qwen consultation provides new insights
+- A hypothesis is proven or disproven
+- Exchange-specific behavior is discovered
+
+**Required fields for each learning**:
+- Date
+- Evidence (log file, date range, specific data)
+- Root cause or explanation
+- Resolution or recommendation
+- Knowledge gaps identified
+
+**PROGRESS.md** - Update when:
+- Bot configuration changes (parameters, strategy)
+- Bot is started, stopped, or switched
+- Exchange accounts change
+- New integrations go live
+
+**Rule**: If you learned something significant, it MUST be documented before the session ends.
 
 ---
 
