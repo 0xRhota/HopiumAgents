@@ -1,6 +1,6 @@
 # Hopium Agents - Progress Tracker
 
-**Last Updated:** 2026-01-22
+**Last Updated:** 2026-01-28
 
 ---
 
@@ -38,31 +38,40 @@
 nohup python3.11 scripts/grid_mm_live.py > logs/grid_mm_live.log 2>&1 &
 ```
 
-#### Nado Grid MM (ETH-PERP)
-**Status**: RUNNING (v18 Qwen-Calibrated Dynamic Spread)
+#### Nado Grid MM (ETH-PERP) + LLM Trading (BTC/SOL)
+**Status**: RUNNING (v19 Grid MM + LLM Trading)
 **Script**: `scripts/grid_mm_nado_v8.py`
 **Log**: `logs/grid_mm_nado.log`
 
-**Current Performance (2026-01-22)**:
-- Balance: $62.65
-- Position: LONG 0.018 ETH (~$53)
+**Current Performance (2026-01-28)**:
+- Balance: $40.52
+- Position: LONG 0.009 ETH (~$27)
 - **Maker Rate: 100%** (POST_ONLY working)
 - Rebalance threshold: 55%
 
-**Configuration (v18 - Qwen-Calibrated Dynamic Spread)**:
+**Configuration (v19 - Grid MM + LLM Trading)**:
+
+*Grid MM (ETH-PERP)*:
 - Symbol: ETH-PERP
-- Spread: **DYNAMIC** based on ROC (Qwen-calibrated between v12 and v13):
+- Spread: **DYNAMIC** based on ROC (Qwen-calibrated):
   - ROC 0-5 bps → 4 bps spread (calm market)
   - ROC 5-10 bps → 6 bps spread (low volatility)
   - ROC 10-20 bps → 8 bps spread (moderate volatility)
   - ROC 20-30 bps → 12 bps spread (high volatility)
   - ROC 30-50 bps → 15 bps spread (very high volatility)
   - ROC >50 bps → PAUSE orders
-- Order type: **POST_ONLY** (maker-only, reject if would cross spread)
+- Order type: **POST_ONLY** (maker-only)
 - Order size: $100/order (Nado minimum)
 - Levels: 2 per side
-- Max inventory: 175% (leveraged)
+- Max inventory: **400%** (4x leverage - needed for $100 orders on $40 balance)
 - Capital: Dynamic (from exchange balance)
+
+*LLM Trading (BTC-PERP, SOL-PERP)*:
+- Model: qwen/qwen-2.5-72b-instruct (via OpenRouter)
+- Position size: $25
+- Max positions: 2
+- Check interval: 600s (10 minutes)
+- Exit rules: +2.0% TP / -1.5% SL / 4h max hold
 
 **Start**:
 ```bash
@@ -439,24 +448,52 @@ python3 scripts/pnl_tracker.py
 
 ---
 
-## Current Bot Status (2026-01-23 00:06)
+## Fixes Applied (2026-01-28)
+
+### 1. Nado Grid MM Not Placing Orders
+**Problem**: Nado bot was running but not placing any orders for hours
+**Root Cause**: With $40 balance and 175% max_inventory ($70 max), a $100 order on top of existing $27 position ($127 total) exceeded limit
+**Fix**: Increased `max_inventory_pct` from 175% to 400% (4x leverage) in `scripts/grid_mm_nado_v8.py:1419`
+**Result**: Grid orders now placing successfully (4 orders: 2 BUY + 2 SELL)
+
+### 2. LLM Trading Added to Nado
+**Feature**: Nado now has LLM-based directional trading alongside Grid MM
+**Assets**: BTC-PERP, SOL-PERP (separate from ETH-PERP grid)
+**Config**: $25 positions, 2 max, +2%/-1.5%/4h exits, Qwen model
+**Implementation**: Direct OpenRouter API calls via aiohttp (no llm_agent dependency)
+
+### 3. Hibachi Trade Tracking Fix
+**Problem**: Trade P&L tracking showed +$10.91 discrepancy vs actual equity
+**Root Cause 1**: CLOSE actions in main decision flow never called `record_exit()` - only LONG/SHORT had recording
+**Fix 1**: Added `record_exit()` call for CLOSE actions in `hibachi_agent/bot_hibachi.py`
+**Root Cause 2**: Orphan positions (exist on exchange but not in tracker) caused missing P&L
+**Fix 2**: Added `sync_orphan_positions()` method that runs on startup to detect and create synthetic entries
+
+### 4. LLM Bot SELL Action Bug (All Bots)
+**Problem**: LLM returning "SELL" for assets was being rejected instead of closing positions
+**Root Cause**: SELL action was checked against current positions and rejected if no SHORT existed
+**Fix**: Convert SELL → CLOSE when there's a LONG position to close
+**Applied to**: hibachi, lighter, extended, pacifica bots
+
+---
+
+## Current Bot Status (2026-01-28)
 
 | Bot | Asset | Strategy | Status |
 |-----|-------|----------|--------|
-| Hibachi Grid MM | BTC only | Spread capture | ✅ RUNNING |
-| Hibachi LLM Bot | ETH, SOL, SUI, XRP, DOGE | Qwen picks best (MAKER-ONLY) | ✅ RUNNING |
-| Nado Grid MM | ETH | v18 Qwen-calibrated spread | ✅ RUNNING |
+| Hibachi LLM Bot | ETH, SOL, SUI, XRP, DOGE, BTC | Strategy F (MAKER-ONLY) + orphan sync | ✅ RUNNING |
+| Nado Grid MM + LLM | ETH (grid) + BTC/SOL (LLM) | v19 Grid + LLM directional | ✅ RUNNING |
 | Paradex Grid MM | BTC | Spread capture | ✅ RUNNING |
 | Extended Grid MM | BTC | v18 POST_ONLY (0% maker fee) | ✅ RUNNING |
 
-**Real Exchange Data (19:00 Jan 22):**
+**Real Exchange Data (2026-01-28):**
 
-| Exchange | Balance | Positions | 24h P&L | 7d P&L |
-|----------|---------|-----------|---------|--------|
-| Hibachi | $44.33 | BTC LONG, XRP LONG, SUI LONG | N/A | N/A |
-| Nado | $62.65 | ETH SHORT 0.021 | +$0.07 | -$23.57 |
-| Paradex | $92.68 | BTC SHORT 0.00078 | -$0.01 | -$0.01 |
-| **Total** | **$199.67** | | **+$0.06** | **-$23.58** |
+| Exchange | Balance | Positions | Notes |
+|----------|---------|-----------|-------|
+| Hibachi | ~$44 | BTC SHORT (synced as orphan) | Tracking fixed |
+| Nado | $40.52 | ETH LONG 0.009 (~$27) | Grid + LLM running |
+| Paradex | ~$92 | - | Grid running |
+| Extended | ~$65 | - | Grid running |
 
 **P&L Tracker:** `python3 scripts/pnl_tracker.py` (queries real exchange APIs)
 

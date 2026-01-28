@@ -724,11 +724,21 @@ class ExtendedTradingBot:
                         else:
                             logger.info(f"  ALLOWED: High confidence ({confidence:.2f}) overrides recent close")
 
-                    # Skip if already have position
-                    has_position = any(p.get('symbol') == symbol for p in current_positions)
-                    if has_position and action in ["BUY", "SELL"]:
-                        logger.info(f"  REJECTED: Already have position in {symbol}")
-                        continue
+                    # Check if already have position - if opposite direction, convert to CLOSE
+                    existing_pos = next((p for p in current_positions if p.get('symbol') == symbol), None)
+                    if existing_pos and action in ["BUY", "SELL"]:
+                        pos_side = existing_pos.get('side', existing_pos.get('direction', 'LONG'))
+                        is_long = pos_side.upper() in ['LONG', 'BUY']
+
+                        # If LLM says opposite direction, convert to CLOSE instead of rejecting
+                        if (is_long and action == "SELL") or (not is_long and action == "BUY"):
+                            logger.info(f"  🔄 Converting {action} to CLOSE: LLM wants opposite direction")
+                            action = "CLOSE"
+                            parsed["action"] = "CLOSE"
+                        else:
+                            # Same direction = trying to add to position, reject
+                            logger.info(f"  REJECTED: Already have {pos_side} position in {symbol}")
+                            continue
 
                     # Validate symbol is an Extended market
                     if symbol not in self.aggregator.extended_markets:

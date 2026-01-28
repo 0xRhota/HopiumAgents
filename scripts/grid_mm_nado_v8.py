@@ -37,11 +37,14 @@ import sys
 import time
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 from collections import deque
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# LLM Trading - use simple API call
+import aiohttp
 
 # Load env
 env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
@@ -74,7 +77,7 @@ class GridMarketMakerNado:
         base_spread_bps: float = 8.0,      # v11: 8 bps (15 was too wide) per Qwen
         order_size_usd: float = 100.0,     # $100 per order
         num_levels: int = 2,               # 2 levels per side
-        max_inventory_pct: float = 100.0,  # v9: Lower leverage limit
+        max_inventory_pct: float = 350.0,  # v19: Allow 3.5x leverage (needed for $100 min orders with $40 capital)
         capital: float = 90.0,             # Account capital
         hedge_symbol: str = "BTC-PERP",    # Cross-asset LONG hedge
         hedge_size_pct: float = 80.0,      # Use 80% of capital for hedge (increased for tariff play)
@@ -121,6 +124,9 @@ class GridMarketMakerNado:
         self.no_fill_alert_threshold_seconds = 1800  # Alert if 0 fills for 30 minutes
         self.no_fill_alert_triggered = False
 
+        # v20: Real fill tracking via Archive API (replaces broken vanished-order detection)
+        self.last_submission_idx = None  # Track last seen match idx
+
         # v14: Cooldown after placing orders (skip fill check for N cycles)
         self.skip_fill_check_cycles = 0
 
@@ -151,6 +157,27 @@ class GridMarketMakerNado:
 
         # Grid reset threshold (v10: 0.5% price move, was 0.25%) per Qwen
         self.grid_reset_pct = 0.50
+
+        # ═══════════════════════════════════════════════════════════════════
+        # LLM TRADING: Open directional longs on BTC/SOL when market looks good
+        # ═══════════════════════════════════════════════════════════════════
+        self.llm_enabled = True
+        self.llm_check_interval = 600  # Check every 10 minutes
+        self.llm_last_check = None
+        self.llm_position_size_usd = 25.0  # $25 per LLM position
+        self.llm_max_positions = 2  # Max 2 LLM positions at a time
+        self.llm_symbols = ["BTC-PERP", "SOL-PERP"]  # Assets to consider
+
+        # LLM position tracking: {symbol: {entry_price, entry_time, size, side}}
+        self.llm_positions: Dict[str, Dict] = {}
+
+        # LLM exit rules
+        self.llm_profit_target_pct = 2.0   # Take profit at +2%
+        self.llm_stop_loss_pct = 1.5       # Stop loss at -1.5%
+        self.llm_max_hold_hours = 4        # Max hold time
+
+        # LLM API key (from env)
+        self.llm_api_key = os.getenv('OPEN_ROUTER')
 
     async def initialize(self):
         """Initialize Nado SDK"""
@@ -222,6 +249,10 @@ class GridMarketMakerNado:
 
         # DISABLED: Hedge feature removed per user request (2026-01-15)
         # await self._open_hedge_long()
+
+        # Initialize LLM trading components
+        if self.llm_enabled:
+            await self._initialize_llm()
 
         return True
 
@@ -368,33 +399,31 @@ class GridMarketMakerNado:
         """
         Calculate dynamic spread based on ROC (volatility).
 
-        v18 (Qwen-calibrated): Middle ground between v12 (too tight, adverse selection)
-        and v13 (too wide, zero fills).
-        - v12 used 1.5 bps calm → 500 trades in 7d but -$23.57 (8.5 bps adverse selection)
-        - v13 used 15 bps calm → 0 fills in 5+ hours
+        v19 (aggressive fills): v18 at 4 bps still produced ZERO fills overnight.
+        Tightening aggressively to get volume while keeping dynamic protection.
 
-        Spread bands (v18 - Qwen calibrated):
+        Spread bands (v19 - aggressive):
         | ROC (abs) | Spread | Rationale |
         |-----------|--------|-----------|
-        | 0-5 bps   | 4 bps  | Calm - tight enough for fills, 2.5x wider than v12 |
-        | 5-10 bps  | 6 bps  | Low volatility, balanced |
-        | 10-20 bps | 8 bps  | Moderate volatility, protect |
-        | 20-30 bps | 12 bps | High volatility, wide protection |
-        | 30-50 bps | 15 bps | Very high vol, minimal exposure |
+        | 0-5 bps   | 1.5 bps| Calm - match v12 tightness for fills |
+        | 5-10 bps  | 2.5 bps| Low vol - still tight |
+        | 10-20 bps | 4 bps  | Moderate vol - was v18 calm level |
+        | 20-30 bps | 6 bps  | High vol - protect |
+        | 30-50 bps | 8 bps  | Very high vol |
         | > 50 bps  | PAUSE  | Stop trading, trend detected |
         """
         abs_roc = abs(roc)
 
         if abs_roc < 5:
-            spread = 4.0
+            spread = 1.5
         elif abs_roc < 10:
-            spread = 6.0
+            spread = 2.5
         elif abs_roc < 20:
-            spread = 8.0
+            spread = 4.0
         elif abs_roc < 30:
-            spread = 12.0
+            spread = 6.0
         elif abs_roc < 50:
-            spread = 15.0
+            spread = 8.0
         else:
             spread = 0.0  # Will trigger pause logic
 
@@ -659,6 +688,7 @@ class GridMarketMakerNado:
                 # Check inventory limit
                 potential = self.position_notional + actual_notional
                 if potential > max_inventory:
+                    logger.debug(f"  BUY L{i} skipped: potential ${potential:.0f} > max ${max_inventory:.0f}")
                     continue
 
                 try:
@@ -754,54 +784,480 @@ class GridMarketMakerNado:
         return self.fills_count / elapsed_hours
 
     async def _check_fills(self) -> int:
-        """Check for filled orders - EXACT v8 logic"""
+        """Check for filled orders using Archive API (v20 - real exchange data).
+
+        Queries the Nado Archive API for actual match records instead of
+        guessing fills from vanished orders (which produced 350x over-counting).
+        """
         fills = 0
         try:
-            orders = await self.sdk.get_orders(self.product_id)
-            exchange_digests = set()
+            # Query real matches from Archive API
+            payload = {
+                "matches": {
+                    "subaccounts": [self.sdk._get_subaccount_bytes32()],
+                    "limit": 50,
+                    "isolated": False
+                }
+            }
+            response = await self.sdk._archive_query(payload)
 
-            for order in orders:
-                digest = order.get('digest')
-                status = order.get('status', '').upper()
+            if "error" in response:
+                logger.error(f"Archive API error: {response['error']}")
+                return 0
 
-                if status in ['OPEN', 'PENDING', 'NEW']:
-                    exchange_digests.add(digest)
+            matches = response.get("matches", [])
 
-                if digest in self.open_orders and status in ['FILLED', 'CLOSED']:
-                    info = self.open_orders[digest]
-                    filled_size = float(order.get('filled_amount', info['size']))
-                    fill_price = info['price']  # Nado may not return fill price
+            if not matches:
+                return 0
 
-                    notional = filled_size * fill_price
+            # Find new matches since last check
+            new_matches = []
+            if self.last_submission_idx is None:
+                # First check - just record the latest idx, don't count historical
+                self.last_submission_idx = matches[0].get("submission_idx")
+                logger.info(f"  Fill tracking initialized (latest idx: {self.last_submission_idx})")
+                return 0
+
+            for match in matches:
+                idx = match.get("submission_idx")
+                if idx and int(idx) > int(self.last_submission_idx):
+                    new_matches.append(match)
+
+            if new_matches:
+                # Update last seen idx
+                self.last_submission_idx = max(m.get("submission_idx") for m in new_matches)
+
+                for match in new_matches:
+                    # Parse x18 format values
+                    base_filled = abs(float(match.get("base_filled", "0"))) / 1e18
+                    quote_filled = abs(float(match.get("quote_filled", "0"))) / 1e18
+                    fee = abs(float(match.get("fee", "0"))) / 1e18
+                    is_taker = match.get("is_taker", False)
+                    order_amount = float(match.get("order", {}).get("amount", "0")) / 1e18
+                    side = "BUY" if order_amount > 0 else "SELL"
+
+                    # quote_filled is the notional value
+                    notional = quote_filled
                     self.total_volume += notional
                     self.fills_count += 1
                     fills += 1
 
-                    # NP-004: Track last fill time
                     self.last_fill_time = datetime.now()
                     self.no_fill_alert_triggered = False
 
-                    logger.info(f"  FILL: {info['side']} {filled_size:.6f} @ ${fill_price:,.2f} (${notional:,.2f})")
-                    del self.open_orders[digest]
+                    price = notional / base_filled if base_filled > 0 else 0
+                    logger.info(f"  FILL: {side} {base_filled:.6f} @ ${price:,.2f} (${notional:,.2f}) fee=${fee:.4f} {'TAKER' if is_taker else 'MAKER'}")
 
-            # v14: REMOVED "inferred fill" logic
-            # On Nado, orders can disappear from get_orders() due to API propagation delays
-            # This was causing false fill detection and constant grid resets
-            # Now we only count fills when we see explicit FILLED/CLOSED status
-            # If orders disappear without status, they were likely cancelled/rejected/expired, not filled
-            tracked_digests = set(self.open_orders.keys())
-            disappeared = tracked_digests - exchange_digests
+            # Sync open_orders: remove stale entries (but do NOT count as fills)
+            orders = await self.sdk.get_orders(self.product_id)
+            exchange_digests = set()
+            for order in orders:
+                digest = order.get('digest')
+                status = order.get('status', '').upper()
+                if status in ['OPEN', 'PENDING', 'NEW']:
+                    exchange_digests.add(digest)
 
-            # Just clear disappeared orders from tracking (don't count as fills)
-            for digest in disappeared:
-                if digest in self.open_orders:
-                    # Don't log or count - silently remove stale tracking
-                    del self.open_orders[digest]
+            stale = [d for d in self.open_orders if d not in exchange_digests]
+            for digest in stale:
+                del self.open_orders[digest]
 
         except Exception as e:
             logger.error(f"Check fills error: {e}")
 
         return fills
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # LLM TRADING METHODS
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    async def _initialize_llm(self):
+        """Initialize LLM trading components"""
+        logger.info("")
+        logger.info("=" * 70)
+        logger.info("🤖 INITIALIZING LLM TRADING")
+        logger.info("=" * 70)
+
+        try:
+            if not self.llm_api_key:
+                logger.warning("  OPEN_ROUTER API key not found - LLM trading disabled")
+                self.llm_enabled = False
+                return
+
+            logger.info(f"  LLM Model: qwen/qwen-2.5-72b-instruct (via OpenRouter)")
+            logger.info(f"  Symbols: {', '.join(self.llm_symbols)}")
+            logger.info(f"  Position size: ${self.llm_position_size_usd}")
+            logger.info(f"  Max positions: {self.llm_max_positions}")
+            logger.info(f"  Check interval: {self.llm_check_interval}s")
+            logger.info(f"  Exit rules: +{self.llm_profit_target_pct}% / -{self.llm_stop_loss_pct}% / {self.llm_max_hold_hours}h max")
+
+            # Sync any existing LLM positions from exchange
+            await self._sync_llm_positions()
+
+            logger.info("  ✅ LLM trading initialized")
+            logger.info("=" * 70)
+
+        except Exception as e:
+            logger.error(f"  ❌ LLM initialization failed: {e}")
+            self.llm_enabled = False
+
+    async def _sync_llm_positions(self):
+        """Sync LLM positions from exchange on startup"""
+        try:
+            positions = await self.sdk.get_positions()
+            if not positions:
+                return
+
+            for pos in positions:
+                symbol = pos.get('symbol')
+                if symbol in self.llm_symbols and symbol not in self.llm_positions:
+                    # This is an LLM-managed symbol with an existing position
+                    size = float(pos.get('size', 0))
+                    if abs(size) > 0:
+                        entry_price = float(pos.get('entry_price', 0))
+                        side = "LONG" if size > 0 else "SHORT"
+                        logger.info(f"  📊 Found existing {symbol} {side}: size={abs(size):.6f} @ ${entry_price:.2f}")
+                        self.llm_positions[symbol] = {
+                            'entry_price': entry_price,
+                            'entry_time': datetime.now(),  # Approximate
+                            'size': abs(size),
+                            'side': side
+                        }
+        except Exception as e:
+            logger.warning(f"  Could not sync LLM positions: {e}")
+
+    async def _run_llm_cycle(self):
+        """Run LLM decision cycle - check for opportunities on BTC/SOL"""
+        if not self.llm_enabled or not self.llm_api_key:
+            return
+
+        now = datetime.now()
+
+        # Check interval
+        if self.llm_last_check:
+            elapsed = (now - self.llm_last_check).total_seconds()
+            if elapsed < self.llm_check_interval:
+                return
+
+        self.llm_last_check = now
+
+        logger.info("")
+        logger.info("=" * 70)
+        logger.info("🤖 LLM DECISION CYCLE")
+        logger.info("=" * 70)
+
+        try:
+            # First, check and manage existing positions
+            await self._manage_llm_positions()
+
+            # Check if we can open new positions
+            current_count = len(self.llm_positions)
+            if current_count >= self.llm_max_positions:
+                logger.info(f"  Max positions reached ({current_count}/{self.llm_max_positions})")
+                return
+
+            # Get market data for LLM symbols
+            market_data = {}
+            for symbol in self.llm_symbols:
+                if symbol in self.llm_positions:
+                    continue  # Skip symbols we already have positions in
+
+                data = await self._get_llm_market_data(symbol)
+                if data:
+                    market_data[symbol] = data
+
+            if not market_data:
+                logger.info("  No symbols available for new positions")
+                return
+
+            # Build prompt for LLM
+            prompt = self._build_llm_prompt(market_data)
+
+            # Get LLM decision via OpenRouter API
+            response = await self._call_llm_api(prompt)
+
+            if not response:
+                logger.info("  No response from LLM")
+                return
+
+            # Parse decision
+            decision = self._parse_llm_decision(response, list(market_data.keys()))
+
+            if not decision or decision.get('action') == 'NO_TRADE':
+                logger.info(f"  LLM Decision: NO_TRADE")
+                return
+
+            # Execute decision
+            await self._execute_llm_decision(decision)
+
+        except Exception as e:
+            logger.error(f"  LLM cycle error: {e}")
+
+        logger.info("=" * 70)
+
+    async def _get_llm_market_data(self, symbol: str) -> Optional[Dict]:
+        """Get market data for a symbol"""
+        try:
+            # Get product ID for symbol
+            product = await self.sdk.get_product_by_symbol(symbol)
+            if not product:
+                logger.warning(f"  Product not found: {symbol}")
+                return None
+
+            product_id = product.get('product_id')
+
+            # Get price from Nado market_price query
+            response = await self.sdk._query("market_price", {"product_id": str(product_id)})
+            if response.get("status") != "success":
+                return None
+
+            data = response.get("data", {})
+            bid = self.sdk._from_x18(int(data.get('bid_x18', '0')))
+            ask = self.sdk._from_x18(int(data.get('ask_x18', '0')))
+
+            if bid <= 0 or ask <= 0:
+                return None
+
+            mid_price = (bid + ask) / 2
+            spread_bps = ((ask - bid) / mid_price) * 10000 if mid_price > 0 else 0
+
+            return {
+                'symbol': symbol,
+                'price': mid_price,
+                'bid': bid,
+                'ask': ask,
+                'spread_bps': spread_bps
+            }
+
+        except Exception as e:
+            logger.warning(f"  Could not get data for {symbol}: {e}")
+            return None
+
+    def _build_llm_prompt(self, market_data: Dict) -> str:
+        """Build a simple prompt for LLM to decide on LONG opportunities"""
+        symbols_info = []
+        for symbol, data in market_data.items():
+            symbols_info.append(f"- {symbol}: ${data['price']:,.2f} (spread: {data['spread_bps']:.1f} bps)")
+
+        prompt = f"""You are a crypto trading assistant. Analyze these markets for LONG opportunities.
+
+Available markets:
+{chr(10).join(symbols_info)}
+
+Current account: Grid MM bot with ~$40 capital, looking for 2% profit targets.
+
+Rules:
+- Only recommend LONG positions (no shorts)
+- Only trade if you see a clear opportunity
+- Confidence must be 0.7+ to trade
+- Prefer BTC for stability, SOL for momentum plays
+
+Respond in this exact format:
+ACTION: [LONG/NO_TRADE]
+SYMBOL: [BTC-PERP/SOL-PERP/NONE]
+CONFIDENCE: [0.0-1.0]
+REASON: [Brief 1-2 sentence reason]
+"""
+        return prompt
+
+    async def _call_llm_api(self, prompt: str) -> Optional[str]:
+        """Call OpenRouter API for Qwen LLM"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.llm_api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "qwen/qwen-2.5-72b-instruct",
+                        "messages": [
+                            {"role": "system", "content": "You are an expert crypto trader. Be concise."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        "max_tokens": 200,
+                        "temperature": 0.3
+                    },
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data.get('choices', [{}])[0].get('message', {}).get('content', '')
+                    else:
+                        logger.error(f"  LLM API error: {resp.status}")
+                        return None
+        except Exception as e:
+            logger.error(f"  LLM API call failed: {e}")
+            return None
+
+    def _parse_llm_decision(self, response: str, available_symbols: List[str]) -> Optional[Dict]:
+        """Parse LLM response into a decision dict"""
+        try:
+            lines = response.strip().split('\n')
+            decision = {}
+
+            for line in lines:
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    key = key.strip().upper()
+                    value = value.strip()
+
+                    if key == 'ACTION':
+                        decision['action'] = value.upper()
+                    elif key == 'SYMBOL':
+                        decision['symbol'] = value.upper()
+                    elif key == 'CONFIDENCE':
+                        try:
+                            decision['confidence'] = float(value)
+                        except:
+                            decision['confidence'] = 0.5
+                    elif key == 'REASON':
+                        decision['reason'] = value
+
+            # Validate
+            if decision.get('action') not in ['LONG', 'NO_TRADE']:
+                return None
+
+            if decision.get('action') == 'LONG':
+                symbol = decision.get('symbol')
+                if symbol not in available_symbols:
+                    logger.warning(f"  Invalid symbol: {symbol}")
+                    return None
+
+                confidence = decision.get('confidence', 0)
+                if confidence < 0.7:
+                    logger.info(f"  Confidence too low: {confidence:.2f} < 0.70")
+                    return {'action': 'NO_TRADE'}
+
+            return decision
+
+        except Exception as e:
+            logger.warning(f"  Parse error: {e}")
+            return None
+
+    async def _execute_llm_decision(self, decision: Dict):
+        """Execute an LLM trading decision"""
+        action = decision.get('action')
+        symbol = decision.get('symbol')
+        confidence = decision.get('confidence', 0)
+        reason = decision.get('reason', 'No reason provided')
+
+        if action != 'LONG' or not symbol:
+            return
+
+        logger.info(f"  📈 LLM Decision: LONG {symbol}")
+        logger.info(f"     Confidence: {confidence:.2f}")
+        logger.info(f"     Reason: {reason[:80]}...")
+
+        try:
+            # Get current price
+            market_data = await self._get_llm_market_data(symbol)
+            if not market_data:
+                logger.error(f"  Could not get price for {symbol}")
+                return
+
+            price = market_data['ask']  # Buy at ask
+
+            # Calculate size
+            size = self.llm_position_size_usd / price
+
+            # Get product info for proper sizing
+            product = await self.sdk.get_product_by_symbol(symbol)
+            if product:
+                step = float(product.get('base_currency_increment', 0.0001))
+                size = round(size / step) * step
+
+            logger.info(f"  Placing LONG order: {size:.6f} {symbol} @ ${price:.2f}")
+
+            # Place market buy order
+            result = await self.sdk.place_order(
+                symbol=symbol,
+                side="buy",
+                size=size,
+                price=price,
+                order_type="limit",
+                reduce_only=False
+            )
+
+            if result and result.get('success'):
+                logger.info(f"  ✅ Order placed successfully")
+                # Track position
+                self.llm_positions[symbol] = {
+                    'entry_price': price,
+                    'entry_time': datetime.now(),
+                    'size': size,
+                    'side': 'LONG'
+                }
+            else:
+                error = result.get('error', 'Unknown') if result else 'No result'
+                logger.error(f"  ❌ Order failed: {error}")
+
+        except Exception as e:
+            logger.error(f"  Execution error: {e}")
+
+    async def _manage_llm_positions(self):
+        """Check and manage existing LLM positions - exit if rules triggered"""
+        if not self.llm_positions:
+            return
+
+        positions_to_close = []
+
+        for symbol, pos_data in self.llm_positions.items():
+            entry_price = pos_data['entry_price']
+            entry_time = pos_data['entry_time']
+            size = pos_data['size']
+
+            # Get current price
+            market_data = await self._get_llm_market_data(symbol)
+            if not market_data:
+                continue
+
+            current_price = market_data['bid']  # Would sell at bid
+            pnl_pct = ((current_price - entry_price) / entry_price) * 100
+            hold_hours = (datetime.now() - entry_time).total_seconds() / 3600
+
+            logger.info(f"  📊 {symbol}: P&L {pnl_pct:+.2f}% | Hold: {hold_hours:.1f}h")
+
+            # Check exit conditions
+            exit_reason = None
+
+            if pnl_pct >= self.llm_profit_target_pct:
+                exit_reason = f"PROFIT TARGET (+{pnl_pct:.2f}%)"
+            elif pnl_pct <= -self.llm_stop_loss_pct:
+                exit_reason = f"STOP LOSS ({pnl_pct:.2f}%)"
+            elif hold_hours >= self.llm_max_hold_hours:
+                exit_reason = f"MAX HOLD TIME ({hold_hours:.1f}h)"
+
+            if exit_reason:
+                positions_to_close.append((symbol, size, exit_reason, current_price))
+
+        # Close positions
+        for symbol, size, reason, price in positions_to_close:
+            logger.info(f"  🔻 Closing {symbol}: {reason}")
+            await self._close_llm_position(symbol, size, price)
+
+    async def _close_llm_position(self, symbol: str, size: float, price: float):
+        """Close an LLM position"""
+        try:
+            result = await self.sdk.place_order(
+                symbol=symbol,
+                side="sell",
+                size=size,
+                price=price,
+                order_type="limit",
+                reduce_only=True
+            )
+
+            if result and result.get('success'):
+                logger.info(f"  ✅ Position closed")
+                if symbol in self.llm_positions:
+                    del self.llm_positions[symbol]
+            else:
+                error = result.get('error', 'Unknown') if result else 'No result'
+                logger.error(f"  ❌ Close failed: {error}")
+
+        except Exception as e:
+            logger.error(f"  Close error: {e}")
 
     async def run(self):
         """Main trading loop - v15 with time-based refresh (US-001)"""
@@ -864,6 +1320,10 @@ class GridMarketMakerNado:
                     logger.info(f"  [REBAL-DBG] notional={self.position_notional:.2f} balance={loop_balance:.2f} max_inv={max_inventory:.2f} ratio={inventory_ratio:.2f} pct={inventory_pct:.0f}%")
 
                 await self._check_inventory_rebalance(inventory_pct, fills)
+
+                # LLM Trading: Check for opportunities on BTC/SOL
+                if self.llm_enabled:
+                    await self._run_llm_cycle()
 
                 # Safety: refresh if no tracked orders
                 no_tracked = len(self.open_orders) == 0
@@ -953,10 +1413,10 @@ class GridMarketMakerNado:
 async def main():
     mm = GridMarketMakerNado(
         symbol="ETH-PERP",
-        base_spread_bps=4.0,         # v18: Qwen-calibrated (dynamic overrides this anyway)
+        base_spread_bps=1.5,         # v19: aggressive fills (dynamic overrides this anyway)
         order_size_usd=100.0,        # $100 = Nado minimum
         num_levels=2,                # v18: 2 levels per side (Qwen recommendation)
-        max_inventory_pct=175.0,     # 1.75x - min needed for $100 orders on $62 balance
+        max_inventory_pct=400.0,     # 4x leverage - needed for $100 orders on $40 balance
         capital=50.0,                # Ignored - uses dynamic balance
         roc_threshold_bps=50.0,      # v14: back to 50 (20 was too aggressive - caused constant pauses)
         min_pause_duration=120,      # v13: shorter pause (was 300) - resume faster in ranges

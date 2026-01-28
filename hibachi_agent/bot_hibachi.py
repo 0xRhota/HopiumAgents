@@ -1089,11 +1089,21 @@ class HibachiTradingBot:
                         else:
                             logger.info(f"  ✅ ALLOWED: High confidence ({confidence:.2f}) overrides recent close")
 
-                    # Skip if already have position
-                    has_position = any(p.get('symbol') == symbol for p in current_positions)
-                    if has_position and action in ["BUY", "SELL"]:
-                        logger.info(f"  ❌ REJECTED: Already have position in {symbol}")
-                        continue
+                    # Check if already have position - if opposite direction, convert to CLOSE
+                    existing_pos = next((p for p in current_positions if p.get('symbol') == symbol), None)
+                    if existing_pos and action in ["BUY", "SELL"]:
+                        pos_side = existing_pos.get('side', existing_pos.get('direction', 'Long'))
+                        is_long = pos_side in ['LONG', 'Long']
+
+                        # If LLM says opposite direction, convert to CLOSE instead of rejecting
+                        if (is_long and action == "SELL") or (not is_long and action == "BUY"):
+                            logger.info(f"  🔄 Converting {action} to CLOSE: LLM wants opposite direction")
+                            action = "CLOSE"
+                            parsed["action"] = "CLOSE"
+                        else:
+                            # Same direction = trying to add to position, reject
+                            logger.info(f"  ❌ REJECTED: Already have {pos_side} position in {symbol}")
+                            continue
 
                     # Validate symbol is a Hibachi market
                     if symbol not in self.aggregator.hibachi_markets:
@@ -1336,6 +1346,20 @@ class HibachiTradingBot:
                             entry_price=entry_price,
                             llm_reasoning=decision.get('reasoning', '')
                         )
+
+                    # STRATEGY F: Record trade exit for learning (CLOSE actions)
+                    if self.strategy_f and action == "CLOSE":
+                        exit_price = result.get('exit_price', 0)
+                        if not exit_price:
+                            # Try to get from market data
+                            exit_price = market_data_dict.get(symbol, {}).get('price', 0)
+                        pnl_usd = result.get('pnl', 0)
+                        self.strategy_f.record_exit(
+                            symbol=symbol,
+                            exit_price=exit_price,
+                            pnl_usd=pnl_usd
+                        )
+                        logger.info(f"   📊 Trade exit recorded: {symbol} P&L: ${pnl_usd:.2f}")
                 else:
                     logger.warning(f"   ⚠️  Execution failed: {result.get('error', 'Unknown')}")
 
@@ -1353,6 +1377,64 @@ class HibachiTradingBot:
         logger.info("✅ Decision cycle complete")
         logger.info("=" * 80)
 
+    async def sync_orphan_positions(self):
+        """
+        Sync exchange positions with tracker on startup.
+        Creates synthetic entries for orphan positions (exist on exchange but not in tracker).
+        This ensures P&L is properly tracked when these positions close.
+        """
+        logger.info("🔄 Checking for orphan positions...")
+
+        try:
+            # Get positions from exchange
+            exchange_positions = await self.executor._fetch_open_positions()
+
+            if not exchange_positions:
+                logger.info("   No exchange positions found")
+                return
+
+            synced_count = 0
+            for pos in exchange_positions:
+                symbol = pos.get('symbol')
+                if not symbol:
+                    continue
+
+                # Check if tracked
+                tracker_data = self.trade_tracker.get_open_trade_for_symbol(symbol)
+
+                if not tracker_data:
+                    # Orphan position - not tracked!
+                    side = pos.get('side', pos.get('direction', 'unknown')).lower()
+                    entry_price = pos.get('entry_price', pos.get('openPrice', 0))
+                    if isinstance(entry_price, str):
+                        entry_price = float(entry_price)
+                    size = pos.get('size', pos.get('quantity', 0))
+                    if isinstance(size, str):
+                        size = float(size)
+
+                    logger.warning(f"   ⚠️ ORPHAN POSITION: {symbol} {side} - not in tracker!")
+                    logger.info(f"      Entry: ${entry_price:.2f}, Size: {size:.6f}")
+                    logger.info(f"      Creating synthetic tracker entry...")
+
+                    # Create synthetic entry so P&L can be tracked when closed
+                    self.trade_tracker.log_entry(
+                        order_id=f"ORPHAN_{symbol}_{int(datetime.now().timestamp())}",
+                        symbol=symbol,
+                        side=side,
+                        entry_price=entry_price,
+                        size=size,
+                        notes="[ORPHAN] Synced from exchange on startup - entry price may be approximate"
+                    )
+                    synced_count += 1
+
+            if synced_count > 0:
+                logger.info(f"   ✅ Synced {synced_count} orphan position(s) to tracker")
+            else:
+                logger.info("   ✅ All positions are properly tracked")
+
+        except Exception as e:
+            logger.error(f"   ❌ Error syncing orphan positions: {e}")
+
     async def run(self):
         """Run continuous trading loop with fast exit monitoring"""
         logger.info("🚀 Starting Hibachi trading bot...")
@@ -1360,6 +1442,9 @@ class HibachiTradingBot:
         logger.info(f"   Check Interval: {self.check_interval}s (LLM decisions)")
         logger.info(f"   Fast Exit: 30s (price-only, FREE)")
         logger.info(f"   Position Size: ${self.position_size}")
+
+        # Sync orphan positions on startup
+        await self.sync_orphan_positions()
 
         cycle_count = 0
 
