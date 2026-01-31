@@ -47,6 +47,7 @@ MARKET_CONFIG = {
     "BTC-USD": {"amount_precision": 5, "price_precision": 0, "min_size_usd": 10},
     "ETH-USD": {"amount_precision": 3, "price_precision": 0, "min_size_usd": 10},
     "SOL-USD": {"amount_precision": 2, "price_precision": 2, "min_size_usd": 10},
+    "XCU-USD": {"amount_precision": 1, "price_precision": 4, "min_size_usd": 6},  # New listing - points boost
 }
 
 

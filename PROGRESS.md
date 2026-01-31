@@ -1,6 +1,6 @@
 # Hopium Agents - Progress Tracker
 
-**Last Updated:** 2026-01-28
+**Last Updated:** 2026-01-30
 
 ---
 
@@ -448,6 +448,20 @@ python3 scripts/pnl_tracker.py
 
 ---
 
+## Changes (2026-01-30)
+
+### XCU-USD Added to Extended
+- Added XCU-USD (new listing) to Extended whitelist for points boost
+- Extended LLM (Strategy D) now trades: BTC-USD, ETH-USD, SOL-USD, XCU-USD
+- Added XCU-USD market config to grid_mm_extended.py
+- XCU params: ~$6 price, 1 decimal precision, $6 min order
+
+### Computer Sleep Recovery
+- Hibachi LLM had connection errors after computer woke from sleep
+- Restarted Hibachi LLM bot - now running normally
+
+---
+
 ## Fixes Applied (2026-01-28)
 
 ### 1. Nado Grid MM Not Placing Orders
@@ -477,23 +491,26 @@ python3 scripts/pnl_tracker.py
 
 ---
 
-## Current Bot Status (2026-01-28)
+## Current Bot Status (2026-01-30)
 
 | Bot | Asset | Strategy | Status |
 |-----|-------|----------|--------|
-| Hibachi LLM Bot | ETH, SOL, SUI, XRP, DOGE, BTC | Strategy F (MAKER-ONLY) + orphan sync | ✅ RUNNING |
+| Hibachi LLM Bot | ETH, SOL, SUI, XRP, DOGE | Strategy F (MAKER-ONLY) | ✅ RUNNING |
+| Hibachi Grid MM | BTC | Spread capture | ✅ RUNNING |
 | Nado Grid MM + LLM | ETH (grid) + BTC/SOL (LLM) | v19 Grid + LLM directional | ✅ RUNNING |
 | Paradex Grid MM | BTC | Spread capture | ✅ RUNNING |
+| Extended LLM | BTC, ETH, SOL, XCU | Strategy D pairs trade | ✅ RUNNING |
 | Extended Grid MM | BTC | v18 POST_ONLY (0% maker fee) | ✅ RUNNING |
 
-**Real Exchange Data (2026-01-28):**
+**Real Exchange Data (2026-01-30 23:00):**
 
-| Exchange | Balance | Positions | Notes |
-|----------|---------|-----------|-------|
-| Hibachi | ~$44 | BTC SHORT (synced as orphan) | Tracking fixed |
-| Nado | $40.52 | ETH LONG 0.009 (~$27) | Grid + LLM running |
-| Paradex | ~$92 | - | Grid running |
-| Extended | ~$65 | - | Grid running |
+| Exchange | Balance | Fills (session) | Notes |
+|----------|---------|-----------------|-------|
+| Hibachi | $25.25 | - | LLM restarted after sleep |
+| Nado | $33.93 | 1,046 (14.7/hr) | ETH LONG 0.024 |
+| Paradex | $83.11 | - | Grid running |
+| Extended | $21.87 | 1,750 (11.8/hr) | XCU-USD added to whitelist |
+| **Total** | **~$164** | | |
 
 **P&L Tracker:** `python3 scripts/pnl_tracker.py` (queries real exchange APIs)
 

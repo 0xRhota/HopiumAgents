@@ -20,9 +20,9 @@ from extended_agent.data.extended_fetcher import ExtendedDataFetcher
 
 logger = logging.getLogger(__name__)
 
-# WHITELIST: Only trade high-liquidity symbols
-# Extended has 72 markets - start conservative with majors
-WHITELISTED_SYMBOLS = {"BTC-USD", "ETH-USD", "SOL-USD"}
+# WHITELIST: Only trade selected symbols
+# Extended has 72 markets - majors + XCU (new listing, points boost)
+WHITELISTED_SYMBOLS = {"BTC-USD", "ETH-USD", "SOL-USD", "XCU-USD"}
 
 
 class ExtendedMarketDataAggregator:
@@ -69,7 +69,7 @@ class ExtendedMarketDataAggregator:
     def extended_markets(self) -> List[str]:
         """
         Get list of available Extended markets from fetcher
-        WHITELIST: Only BTC, ETH, SOL (conservative start)
+        WHITELIST: Only selected symbols
 
         Returns:
             List of symbol strings
@@ -77,7 +77,7 @@ class ExtendedMarketDataAggregator:
         all_symbols = self.extended.available_symbols
         # WHITELIST mode: only trade specific symbols
         filtered = [s for s in all_symbols if s in WHITELISTED_SYMBOLS]
-        logger.info(f"Whitelist active: trading only {len(filtered)} symbols (BTC, ETH, SOL)")
+        logger.info(f"Whitelist active: trading {len(filtered)} symbols: {', '.join(sorted(filtered))}")
         return filtered
 
     async def fetch_market_data(self, symbol: str) -> Optional[Dict]:
