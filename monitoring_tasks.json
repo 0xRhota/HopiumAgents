@@ -1,0 +1,48 @@
+{
+  "name": "Trading Bot Monitoring Loop",
+  "startTime": "2026-01-22T01:26:00-03:00",
+  "duration": "7 hours",
+  "interval": "15 minutes",
+  "tasks": [
+    {
+      "id": 1,
+      "name": "Check all bot processes running",
+      "critical": true
+    },
+    {
+      "id": 2,
+      "name": "Check Hibachi positions and P&L",
+      "critical": true,
+      "alerts": {
+        "loss_threshold_pct": -5,
+        "max_position_usd": 800
+      }
+    },
+    {
+      "id": 3,
+      "name": "Check Nado positions and fills",
+      "critical": true
+    },
+    {
+      "id": 4,
+      "name": "Check LLM Supervisor activity",
+      "critical": true
+    },
+    {
+      "id": 5,
+      "name": "Check for errors in logs",
+      "critical": true
+    },
+    {
+      "id": 6,
+      "name": "Identify and fix any bugs",
+      "critical": false
+    },
+    {
+      "id": 7,
+      "name": "Restart bots if needed",
+      "critical": false
+    }
+  ],
+  "learnings": []
+}

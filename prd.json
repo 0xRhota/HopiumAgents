@@ -1,0 +1,153 @@
+{
+  "project": "Hibachi Dual Strategy",
+  "branchName": "ralph/hibachi-self-improvement",
+  "description": "Self-improving trading bot - Fix bugs and optimize until profitable",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add time-based refresh to Nado Grid MM",
+      "description": "Add periodic refresh (every 5 minutes) to ensure orders and spread stay fresh regardless of fills or price movement.",
+      "acceptanceCriteria": [
+        "Add last_refresh_time tracking variable",
+        "Refresh orders if >5 minutes since last placement",
+        "Move _calculate_dynamic_spread() call OUTSIDE of _place_grid_orders() so spread updates every status cycle",
+        "Log shows 'Time-based refresh' when triggered",
+        "Syntax check passes: python3 -m py_compile scripts/grid_mm_nado_v8.py"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Completed 2026-01-22: Added v15 time-based refresh + spread updates every cycle"
+    },
+    {
+      "id": "US-002",
+      "title": "Add time-based refresh to Paradex Grid MM",
+      "description": "Apply same time-based refresh to Paradex to prevent stale orders sitting far from market.",
+      "acceptanceCriteria": [
+        "Add last_refresh_time tracking variable",
+        "Refresh orders if >5 minutes since last placement",
+        "Log shows 'Time-based refresh' when triggered",
+        "Syntax check passes: python3 -m py_compile scripts/grid_mm_live.py"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Completed 2026-01-22: Added v15 time-based refresh. Also fixed await in non-async syntax errors."
+    },
+    {
+      "id": "US-003",
+      "title": "Add stale order detection",
+      "description": "Detect when existing orders are too far from current mid price and refresh them immediately.",
+      "acceptanceCriteria": [
+        "Calculate distance of tracked orders from current mid price",
+        "If any order is >0.2% from mid, trigger immediate refresh",
+        "Log shows 'Stale order refresh: order at $X is Y% from mid'",
+        "Apply to both Nado and Paradex scripts"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Reduce spread in calm markets",
+      "description": "When volatility is very low (ROC < 2bps for sustained period), tighten spread to increase fill probability.",
+      "acceptanceCriteria": [
+        "Track consecutive low-ROC cycles (ROC < 2bps)",
+        "After 2 minutes of low ROC, reduce spread by 20%",
+        "Log shows 'TIGHT_SPREAD mode: spread reduced to Xbps'",
+        "Revert to normal spread when ROC increases above 5bps",
+        "Add test case to tests/test_dynamic_spread.py"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Inventory rebalancing for stuck positions",
+      "description": "When at 100% inventory for extended period with 0 fills, use market order to rebalance.",
+      "acceptanceCriteria": [
+        "Track time at max inventory (>=95%)",
+        "After 10 minutes at max inventory with 0 fills, close 25% of position via market order",
+        "Log shows 'Inventory rebalance: closing 25% position at $X'",
+        "Limit to once per hour maximum",
+        "Only apply to Nado (DEX liquidity issue)"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "Nado had 100% inventory for entire 1-hour monitoring period"
+    },
+    {
+      "id": "US-006",
+      "title": "Add momentum confirmation to LLM scoring",
+      "description": "Enhance v9 scoring by requiring 5-minute momentum to confirm LLM direction before entering.",
+      "acceptanceCriteria": [
+        "Calculate 5-minute price momentum before entry",
+        "Require momentum direction matches LLM direction (both bullish or both bearish)",
+        "Log momentum value in trade decision output",
+        "Track and document win rate change in progress.txt"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Implement trailing stop for winning trades",
+      "description": "Lock in profits by trailing stop loss as position moves in our favor.",
+      "acceptanceCriteria": [
+        "When P&L > 4%, move stop loss to breakeven (entry price)",
+        "When P&L > 6%, trail stop at (current P&L - 2%)",
+        "Log trailing stop adjustments in fast_exit_monitor",
+        "Add trailing_stop_pct field to position tracking"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Create automated performance tracker",
+      "description": "Script to measure hourly performance metrics and log them for analysis.",
+      "acceptanceCriteria": [
+        "Create scripts/track_performance.py",
+        "Track: fills/hour, volume/hour, P&L/hour per bot",
+        "Write metrics to logs/performance_metrics.json with timestamps",
+        "Can be run via cron every hour",
+        "Include bot identifier (nado, paradex, hibachi_grid, hibachi_llm)"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Parameter optimization framework",
+      "description": "Framework to test different parameter sets and measure/compare results.",
+      "acceptanceCriteria": [
+        "Create config/grid_mm_variants.json with parameter sets to test",
+        "Scripts read active variant from config",
+        "Log which variant is active in each status line",
+        "Performance tracker records variant ID with metrics",
+        "Document recommended parameters in progress.txt after testing"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Final integration and documentation",
+      "description": "Apply best parameters from testing, run 24-hour validation, update all documentation.",
+      "acceptanceCriteria": [
+        "Update PROGRESS.md with final optimized configuration",
+        "Update LEARNINGS.md with optimization results and key findings",
+        "All bots running with optimized parameters",
+        "24-hour test shows positive or breakeven P&L (document actual result)",
+        "Remove experimental/debug logging if any"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

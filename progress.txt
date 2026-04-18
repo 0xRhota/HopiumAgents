@@ -1,0 +1,103 @@
+## Codebase Patterns
+
+- Grid MM scripts are in `scripts/` (grid_mm_hibachi.py, grid_mm_nado_v8.py, grid_mm_live.py)
+- Hibachi uses 30s time-based refresh (working correctly)
+- Nado/Paradex use price/fill-based refresh (broken - orders go stale)
+- Dynamic spread is calculated in `_calculate_dynamic_spread()` method
+- ROC threshold for pause is configurable via `roc_threshold_bps` parameter
+- All bots use POST_ONLY orders to guarantee maker fills
+- Exchange SDKs are in `dexes/` directory
+- Tests for dynamic spread logic: `tests/test_dynamic_spread.py`
+
+---
+
+## 2026-01-22 - Initial State Assessment
+
+### Issues Identified:
+
+1. **Nado Grid MM**: 0 fills in 3.5+ hours
+   - 102% inventory (LONG), can only SELL
+   - Dynamic spread working (30bps at high ROC)
+   - PAUSE logic working (pauses during trends)
+   - Problem: No buyers on Nado DEX - liquidity issue
+   - File: `scripts/grid_mm_nado_v8.py`
+
+2. **Paradex Grid MM**: 0 fills in 1+ hour
+   - Stale orders from 08:10 sitting $70+ from market
+   - 0.5% price reset threshold too conservative
+   - "No active orders" check doesn't help (stale orders still OPEN on exchange)
+   - File: `scripts/grid_mm_live.py`
+
+3. **Both bots**: Spread doesn't update without order placement
+   - `_calculate_dynamic_spread()` only called inside `_place_grid_orders()`
+   - With 0 fills and <0.5% price move, spread never recalculates
+   - Evidence: ROC at 27.8bps but spread stuck at 15bps
+
+4. **Hibachi Grid MM**: Working correctly
+   - 30s time-based refresh prevents stale orders
+   - Dynamic spread updates every cycle
+   - This is the model to follow
+
+### Learnings for future iterations:
+
+- Time-based refresh (like Hibachi) is essential for low-liquidity markets
+- Price-based refresh (0.5% threshold) is too conservative
+- DEX liquidity varies significantly - Nado may not be viable for grid MM
+- Always check if orders are actually being placed, not just tracked
+
+---
+
+---
+
+## 2026-01-22 12:45 -03 - US-001
+
+### What was implemented:
+- Added `last_refresh_time` tracking variable to `GridMarketMakerNado`
+- Added `time_refresh_interval = 300` (5 minutes)
+- Time-based refresh check: if >5 minutes since last order placement, trigger refresh
+- Moved `_calculate_dynamic_spread()` call OUTSIDE of `_place_grid_orders()` to the main loop
+  - Now spread updates every cycle (every 1 second), not just when orders are placed
+- Log shows 'Time-based refresh: Xs since last placement' when triggered
+- Updated file header to document v15 changes
+
+### Files changed:
+- `scripts/grid_mm_nado_v8.py` - Added time-based refresh (v15)
+
+### Quality check results:
+- `python3 -m py_compile scripts/grid_mm_nado_v8.py` - PASSED
+- `python3 -m py_compile scripts/grid_mm_hibachi.py` - PASSED
+- `pytest tests/test_dynamic_spread.py` - 27/30 passed (3 pre-existing failures: Paradex syntax error, spread value mismatch from v13 config)
+
+### Learnings for future iterations:
+- Hibachi uses 30s time-based refresh and works correctly - apply same pattern to other bots
+- Spread calculation MUST happen every cycle, not just on order placement
+- The Paradex script (`grid_mm_live.py`) has a pre-existing syntax error that needs fixing (US-002)
+- Test file expects old v12 spread values (1.5-10 bps) but Nado v13 uses wider spreads (15-30 bps) - test is outdated, not a bug
+
+---
+
+## 2026-01-22 12:51 -03 - US-002
+
+### What was implemented:
+- Added `last_refresh_time` tracking variable to `GridMarketMakerLive`
+- Added `time_refresh_interval = 300` (5 minutes)
+- Time-based refresh check: if >5 minutes since last order placement, trigger refresh
+- Log shows 'Time-based refresh: Xs since last placement' when triggered
+- Updated file header to document v15 changes
+- Fixed syntax errors: removed `await` keywords from non-async sync methods (`_place_grid_orders()` and `run()`)
+
+### Files changed:
+- `scripts/grid_mm_live.py` - Added time-based refresh (v15), fixed sync/async mismatch
+
+### Quality check results:
+- `python3 -m py_compile scripts/grid_mm_live.py` - PASSED
+- `python3 -m py_compile scripts/grid_mm_hibachi.py` - PASSED
+- `python3 -m py_compile scripts/grid_mm_nado_v8.py` - PASSED
+- `pytest tests/test_dynamic_spread.py` - 27/30 passed (same pre-existing failures as US-001)
+
+### Learnings for future iterations:
+- Paradex script uses sync client (`self.client.api_client`) NOT async, so cannot use `await`
+- Syntax errors like await-in-sync can slip through if not running py_compile regularly
+- Both Nado and Paradex now have time-based refresh aligned with Hibachi pattern
+- Next step (US-003) should add stale order detection for immediate refresh when orders drift too far
+

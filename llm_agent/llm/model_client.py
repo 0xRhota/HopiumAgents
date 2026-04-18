@@ -37,14 +37,58 @@ MODEL_CONFIGS = {
         "output_cost_per_1k": 0.00220,
         "default_max_tokens": 500,
     },
-    # Qwen via OpenRouter - Alpha Arena winner!
+    # Qwen via OpenRouter - Updated to latest model
     "qwen-max": {
         "provider": "openrouter",
         "url": "https://openrouter.ai/api/v1/chat/completions",
-        "model_id": "qwen/qwen3-235b-a22b",
-        "input_cost_per_1k": 0.0012,   # ~$1.20/M
-        "output_cost_per_1k": 0.006,    # ~$6.00/M
-        "default_max_tokens": 1500,     # Qwen needs more tokens for thinking
+        "model_id": "qwen/qwen3-235b-a22b-2507",  # Newer, cheaper, 262K context
+        "input_cost_per_1k": 0.00007,   # ~$0.07/M
+        "output_cost_per_1k": 0.0001,   # ~$0.10/M
+        "default_max_tokens": 1500,
+    },
+    # Qwen free tier for testing
+    "qwen-free": {
+        "provider": "openrouter",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model_id": "qwen/qwen3-next-80b-a3b-instruct:free",
+        "input_cost_per_1k": 0.0,
+        "output_cost_per_1k": 0.0,
+        "default_max_tokens": 1500,
+    },
+    # GPT-4o via OpenRouter - fast and decisive
+    "gpt-4o": {
+        "provider": "openrouter",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model_id": "openai/gpt-4o",
+        "input_cost_per_1k": 0.0025,   # ~$2.50/M
+        "output_cost_per_1k": 0.01,     # ~$10.00/M
+        "default_max_tokens": 500,      # GPT is concise
+    },
+    # GPT-4o-mini via OpenRouter - cheaper, still fast
+    "gpt-4o-mini": {
+        "provider": "openrouter",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model_id": "openai/gpt-4o-mini",
+        "input_cost_per_1k": 0.00015,  # ~$0.15/M
+        "output_cost_per_1k": 0.0006,   # ~$0.60/M
+        "default_max_tokens": 500,
+    },
+    # GPT-5.1 Instant via OpenAI direct - fast, decisive
+    "gpt-5.1": {
+        "provider": "openai",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "model_id": "gpt-5.1",
+        "input_cost_per_1k": 0.00175,  # ~$1.75/M
+        "output_cost_per_1k": 0.014,    # ~$14/M
+        "default_max_tokens": 500,
+    },
+    "gpt-5.1-instant": {
+        "provider": "openai",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "model_id": "gpt-5.1",
+        "input_cost_per_1k": 0.00175,
+        "output_cost_per_1k": 0.014,
+        "default_max_tokens": 500,
     },
 }
 

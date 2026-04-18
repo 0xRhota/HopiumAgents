@@ -164,7 +164,7 @@ class GridMarketMakerNado:
         self.llm_enabled = True
         self.llm_check_interval = 600  # Check every 10 minutes
         self.llm_last_check = None
-        self.llm_position_size_usd = 25.0  # $25 per LLM position
+        self.llm_position_size_usd = 10.0  # $10 per LLM position (reduced for low capital)
         self.llm_max_positions = 2  # Max 2 LLM positions at a time
         self.llm_symbols = ["BTC-PERP", "SOL-PERP"]  # Assets to consider
 
@@ -883,7 +883,7 @@ class GridMarketMakerNado:
                 self.llm_enabled = False
                 return
 
-            logger.info(f"  LLM Model: qwen/qwen-2.5-72b-instruct (via OpenRouter)")
+            logger.info(f"  LLM Model: qwen/qwen3.6-plus:free (via OpenRouter)")
             logger.info(f"  Symbols: {', '.join(self.llm_symbols)}")
             logger.info(f"  Position size: ${self.llm_position_size_usd}")
             logger.info(f"  Max positions: {self.llm_max_positions}")
@@ -1033,26 +1033,31 @@ class GridMarketMakerNado:
             return None
 
     def _build_llm_prompt(self, market_data: Dict) -> str:
-        """Build a simple prompt for LLM to decide on LONG opportunities"""
+        """Build prompt for LLM to decide on LONG or SHORT opportunities based on trend"""
+        # Get current ROC for trend context
+        current_roc = self._calculate_roc()
+        trend_direction = "UPTREND" if current_roc > 20 else "DOWNTREND" if current_roc < -20 else "SIDEWAYS"
+
         symbols_info = []
         for symbol, data in market_data.items():
             symbols_info.append(f"- {symbol}: ${data['price']:,.2f} (spread: {data['spread_bps']:.1f} bps)")
 
-        prompt = f"""You are a crypto trading assistant. Analyze these markets for LONG opportunities.
+        prompt = f"""You are a crypto trend trading assistant. The grid MM is paused due to strong trend - your job is to TRADE THE TREND.
+
+TREND SIGNAL: {trend_direction} (ROC: {current_roc:+.1f} bps)
 
 Available markets:
 {chr(10).join(symbols_info)}
 
-Current account: Grid MM bot with ~$40 capital, looking for 2% profit targets.
-
 Rules:
-- Only recommend LONG positions (no shorts)
-- Only trade if you see a clear opportunity
+- UPTREND (ROC > +20): Favor LONG positions
+- DOWNTREND (ROC < -20): Favor SHORT positions
+- SIDEWAYS: NO_TRADE (let grid MM handle it)
 - Confidence must be 0.7+ to trade
-- Prefer BTC for stability, SOL for momentum plays
+- We want to ride the trend, not fight it
 
 Respond in this exact format:
-ACTION: [LONG/NO_TRADE]
+ACTION: [LONG/SHORT/NO_TRADE]
 SYMBOL: [BTC-PERP/SOL-PERP/NONE]
 CONFIDENCE: [0.0-1.0]
 REASON: [Brief 1-2 sentence reason]
@@ -1070,7 +1075,7 @@ REASON: [Brief 1-2 sentence reason]
                         "Content-Type": "application/json"
                     },
                     json={
-                        "model": "qwen/qwen-2.5-72b-instruct",
+                        "model": "qwen/qwen3.6-plus:free",
                         "messages": [
                             {"role": "system", "content": "You are an expert crypto trader. Be concise."},
                             {"role": "user", "content": prompt}
@@ -1115,10 +1120,10 @@ REASON: [Brief 1-2 sentence reason]
                         decision['reason'] = value
 
             # Validate
-            if decision.get('action') not in ['LONG', 'NO_TRADE']:
+            if decision.get('action') not in ['LONG', 'SHORT', 'NO_TRADE']:
                 return None
 
-            if decision.get('action') == 'LONG':
+            if decision.get('action') in ('LONG', 'SHORT'):
                 symbol = decision.get('symbol')
                 if symbol not in available_symbols:
                     logger.warning(f"  Invalid symbol: {symbol}")
@@ -1136,16 +1141,17 @@ REASON: [Brief 1-2 sentence reason]
             return None
 
     async def _execute_llm_decision(self, decision: Dict):
-        """Execute an LLM trading decision"""
+        """Execute an LLM trading decision (LONG or SHORT)"""
         action = decision.get('action')
         symbol = decision.get('symbol')
         confidence = decision.get('confidence', 0)
         reason = decision.get('reason', 'No reason provided')
 
-        if action != 'LONG' or not symbol:
+        if action not in ('LONG', 'SHORT') or not symbol:
             return
 
-        logger.info(f"  📈 LLM Decision: LONG {symbol}")
+        emoji = "📈" if action == "LONG" else "📉"
+        logger.info(f"  {emoji} LLM Decision: {action} {symbol}")
         logger.info(f"     Confidence: {confidence:.2f}")
         logger.info(f"     Reason: {reason[:80]}...")
 
@@ -1156,7 +1162,9 @@ REASON: [Brief 1-2 sentence reason]
                 logger.error(f"  Could not get price for {symbol}")
                 return
 
-            price = market_data['ask']  # Buy at ask
+            # Buy at ask, sell at bid
+            price = market_data['ask'] if action == 'LONG' else market_data['bid']
+            side = "buy" if action == "LONG" else "sell"
 
             # Calculate size
             size = self.llm_position_size_usd / price
@@ -1167,26 +1175,27 @@ REASON: [Brief 1-2 sentence reason]
                 step = float(product.get('base_currency_increment', 0.0001))
                 size = round(size / step) * step
 
-            logger.info(f"  Placing LONG order: {size:.6f} {symbol} @ ${price:.2f}")
+            logger.info(f"  Placing {action} order: {size:.6f} {symbol} @ ${price:.2f}")
 
-            # Place market buy order
-            result = await self.sdk.place_order(
+            # Place order using correct SDK method
+            is_buy = (action == "LONG")
+            result = await self.sdk.create_limit_order(
                 symbol=symbol,
-                side="buy",
-                size=size,
+                is_buy=is_buy,
+                amount=size,
                 price=price,
-                order_type="limit",
+                order_type="DEFAULT",
                 reduce_only=False
             )
 
-            if result and result.get('success'):
-                logger.info(f"  ✅ Order placed successfully")
+            if result and result.get('status') != 'failure' and result.get('orderId'):
+                logger.info(f"  ✅ Order placed: {result.get('orderId')}")
                 # Track position
                 self.llm_positions[symbol] = {
                     'entry_price': price,
                     'entry_time': datetime.now(),
                     'size': size,
-                    'side': 'LONG'
+                    'side': action
                 }
             else:
                 error = result.get('error', 'Unknown') if result else 'No result'
@@ -1206,17 +1215,25 @@ REASON: [Brief 1-2 sentence reason]
             entry_price = pos_data['entry_price']
             entry_time = pos_data['entry_time']
             size = pos_data['size']
+            side = pos_data.get('side', 'LONG')
 
             # Get current price
             market_data = await self._get_llm_market_data(symbol)
             if not market_data:
                 continue
 
-            current_price = market_data['bid']  # Would sell at bid
-            pnl_pct = ((current_price - entry_price) / entry_price) * 100
+            # For LONG: close at bid, profit when price up
+            # For SHORT: close at ask, profit when price down
+            if side == 'LONG':
+                current_price = market_data['bid']
+                pnl_pct = ((current_price - entry_price) / entry_price) * 100
+            else:  # SHORT
+                current_price = market_data['ask']
+                pnl_pct = ((entry_price - current_price) / entry_price) * 100
+
             hold_hours = (datetime.now() - entry_time).total_seconds() / 3600
 
-            logger.info(f"  📊 {symbol}: P&L {pnl_pct:+.2f}% | Hold: {hold_hours:.1f}h")
+            logger.info(f"  📊 {symbol} {side}: P&L {pnl_pct:+.2f}% | Hold: {hold_hours:.1f}h")
 
             # Check exit conditions
             exit_reason = None
@@ -1237,19 +1254,24 @@ REASON: [Brief 1-2 sentence reason]
             await self._close_llm_position(symbol, size, price)
 
     async def _close_llm_position(self, symbol: str, size: float, price: float):
-        """Close an LLM position"""
+        """Close an LLM position (LONG or SHORT)"""
         try:
-            result = await self.sdk.place_order(
+            # Determine close side based on position side
+            pos_info = self.llm_positions.get(symbol, {})
+            pos_side = pos_info.get('side', 'LONG')
+            is_buy = (pos_side == "SHORT")  # Buy to close SHORT, sell to close LONG
+
+            result = await self.sdk.create_limit_order(
                 symbol=symbol,
-                side="sell",
-                size=size,
+                is_buy=is_buy,
+                amount=size,
                 price=price,
-                order_type="limit",
+                order_type="DEFAULT",
                 reduce_only=True
             )
 
-            if result and result.get('success'):
-                logger.info(f"  ✅ Position closed")
+            if result and result.get('status') != 'failure' and result.get('orderId'):
+                logger.info(f"  ✅ Position closed ({pos_side})")
                 if symbol in self.llm_positions:
                     del self.llm_positions[symbol]
             else:

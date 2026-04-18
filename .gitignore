@@ -92,3 +92,7 @@ trade-history-*.csv
 # Wallet/account specific research
 research/*/trade-history-*.csv
 research/pacifica/winning-wallets/
+
+# MCP tool clones (separate git repos)
+tools/crypto-indicators-mcp/
+tools/funding-rates-mcp/

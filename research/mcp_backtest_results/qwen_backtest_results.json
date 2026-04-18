@@ -1,0 +1,42 @@
+{
+  "QWEN_Nado_ShortBias": {
+    "name": "Qwen: Nado Short Bias (2 pos, 1H filter)",
+    "trades": 1051,
+    "daily_trades": 35.0,
+    "daily_volume": 7009.1,
+    "total_pnl": 10.998,
+    "daily_pnl": 0.3667,
+    "win_rate": 43.9,
+    "max_drawdown": 18.35
+  },
+  "QWEN_Hibachi_MeanRev": {
+    "name": "Qwen: Hibachi Mean Rev (5 pos, fast TP)",
+    "trades": 968,
+    "daily_trades": 32.3,
+    "daily_volume": 952.33,
+    "total_pnl": -3.2992,
+    "daily_pnl": -0.11,
+    "win_rate": 56.3,
+    "max_drawdown": 3.49
+  },
+  "QWEN_Combined": {
+    "name": "Qwen: Combined (all symbols, 1H filter)",
+    "trades": 1543,
+    "daily_trades": 51.5,
+    "daily_volume": 10290.24,
+    "total_pnl": -28.2122,
+    "daily_pnl": -0.9407,
+    "win_rate": 41.5,
+    "max_drawdown": 45.17
+  },
+  "QWEN_PartialTP_Optimized": {
+    "name": "Qwen: Optimized Partial TP (75/25 split)",
+    "trades": 2426,
+    "daily_trades": 80.9,
+    "daily_volume": 11337.27,
+    "total_pnl": -24.0736,
+    "daily_pnl": -0.8027,
+    "win_rate": 56.6,
+    "max_drawdown": 30.16
+  }
+}

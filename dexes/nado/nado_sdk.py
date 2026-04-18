@@ -75,6 +75,13 @@ class NadoSDK:
         38: "kPEPE-PERP",
         40: "PENGU-PERP",
         42: "USELESS-PERP",
+        44: "SKR-PERP",
+        46: "UNI-PERP",
+        48: "ASTER-PERP",
+        50: "XPL-PERP",
+        52: "DOGE-PERP",
+        54: "WLFI-PERP",
+        56: "kBONK-PERP",
     }
 
     def __init__(
@@ -457,6 +464,11 @@ class NadoSDK:
                 # Parse oracle price for convenience
                 oracle_price_x18 = p.get("oracle_price_x18", "0")
                 p["oracle_price"] = self._from_x18(int(oracle_price_x18))
+                # Parse book_info increments
+                bi = p.get("book_info", {})
+                p["price_increment"] = self._from_x18(int(bi.get("price_increment_x18", "0")))
+                p["size_increment"] = self._from_x18(int(bi.get("size_increment", "0")))
+                p["min_size"] = self._from_x18(int(bi.get("min_size", "0")))
 
             self._products_cache = perp_products
             self._products_cache_time = time.time()
@@ -712,6 +724,10 @@ class NadoSDK:
             if not is_buy:
                 amount_x18 = -amount_x18
             price_x18 = self._to_x18(price)
+
+            # Snap price to price_increment to avoid float→x18 rounding errors
+            price_increment_x18 = int(product.get("book_info", {}).get("price_increment_x18", "100000000000000000"))
+            price_x18 = (price_x18 // price_increment_x18) * price_increment_x18
 
             # Generate order params
             nonce = self._generate_nonce()

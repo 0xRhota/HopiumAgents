@@ -1,7 +1,167 @@
 # Hopium Agents - Learnings Log
 
 **Purpose**: Central location for all strategy learnings with hard evidence and specific references.
-**Last Updated**: 2026-01-22 (HIB-001 through HIB-007 added)
+**Last Updated**: 2026-02-18 (MOM-007 added: remove fixed rails)
+
+---
+
+## MOM-007: Remove Fixed TP/SL/Max-Hold — Signal-Based Exits
+
+**Date**: 2026-02-18
+**Evidence**: 60 Nado trades analyzed — SL exits avg 17min hold (0% WR, -$11.85), while 30-60min holds had 84.6% WR (+$5.55). Fixed TP at 120-150bps was cutting winners before they ran.
+
+**Problem**: Hard-coded TP/SL bps, max_hold=30min, score_min=4.5, max_positions=1 — plus overnight monitor auto-tightening all params hourly. Too many rails that choked the engine's ability to trade openly.
+
+**Data**:
+- Trend_strength paradox: 0.3-0.5 had 61.5% WR, 0.9-1.0 had 27.3% WR (high confidence = worse outcomes)
+- Performance degraded: first 30 trades 46.7% WR → last 30 trades 33.3% WR (as monitor tightened)
+- Overnight monitor cranked score_min from 3.0 → 4.5, max_positions from 5 → 1, max_hold from 240 → 30min
+
+**Fix**:
+1. Removed `tp_bps`, `sl_bps`, `max_hold_minutes` from MomentumConfig
+2. Added `emergency_sl_bps = 500` (5% catastrophic stop — safety net only)
+3. New `should_exit()` logic: exit on TREND_FLIP (opposite direction signal with score >= 2.0) or EMERGENCY_SL
+4. Positions hold until the scoring engine itself says the market reversed
+5. Stripped per-exchange config overrides to minimal (only offset_bps and size_usd differ)
+6. Restored score_min=3.0, max_positions=5
+7. Killed overnight_monitor.py process (was adding unwanted rails)
+
+**Expected impact**: Positions hold longer through noise, exit only when trend genuinely reverses. No more premature SL exits at 17min avg.
+
+**Knowledge gaps**: Need to observe how TREND_FLIP performs vs old TP/SL over 24-48 hours. Emergency SL at 5% may need tuning.
+
+---
+
+## MOM-006: Maker-First Exits Save 2.5-3.5 bps Per Trade
+
+**Date**: 2026-02-18
+**Evidence**: All exits were using IOC/market orders (taker), paying 2.5 bps (Extended) or 3.5 bps (Nado/Hibachi) on every close.
+
+**Problem**: Entries were already POST_ONLY (0% maker fee), but every exit paid taker fee. With $40-105 trade size and 100-150 bps TP, taker fee on exit consumed 1.7-3.5% of every win's profit.
+
+**Fix**: Added maker-first close logic to all three exchange adapters:
+1. Try POST_ONLY limit at best bid/ask price (0% fee)
+2. Wait up to 12 seconds for fill (6 checks x 2s)
+3. If not filled, cancel and fall back to IOC/market (taker)
+
+**Exchange specifics**:
+- Extended: POST_ONLY sell at best ask / buy at best bid, GTT 1min, reduce_only
+- Nado: POST_ONLY limit at oracle price, reduce_only
+- Hibachi: Limit at 0.02% inside mark (no POST_ONLY support), reduces to market if unfilled
+
+**Expected impact**: Most TP and TIME exits fill as maker (0%). SL exits in fast markets may still hit taker fallback. Estimated 60-80% of exits become maker.
+
+---
+
+## MOM-005: Autonomous Overnight Monitoring with Qwen
+
+**Date**: 2026-02-17
+**Evidence**: 552 trades total, -$31.82 PnL. Extended 4.7% WR, Hibachi 19.3%, Nado 28.7%.
+
+**Problem**: Manual strategy tuning is too slow. Changes need to be tested, monitored, and adjusted iteratively.
+
+**Solution**: Created `scripts/overnight_monitor.py`:
+- Runs hourly, collects trade stats from JSONL logs
+- Checks exchange equity and positions
+- Consults Qwen (with LLM fallback chain: Qwen → Gemini → Llama)
+- Qwen analyzes performance and recommends specific config changes
+- Script applies changes to `momentum_mm.py` and restarts bots
+- Safety bounds prevent extreme values (score_min 2.0-4.5, tp_bps 50-500, etc.)
+- Nado min notional ($105) is hardcoded and cannot be reduced
+
+**First Qwen recommendation**: Tighten everything — score_min 3.5 (Nado/Hibachi), 4.0 (Extended), TP/SL 150/100, max_positions 2, max_hold 120min, smaller sizes.
+
+**Key Insight**: Reconciled positions (entry_price=0) produce garbage PnL — must be filtered from stats. 24 reconciled trades out of 576 had inflated PnL numbers ($100+ each).
+
+---
+
+## MOM-004: Volume Gate and 15-Minute Candles
+
+**Date**: 2026-02-17
+**Evidence**: Bots were running OLD code despite engine.py being updated. TP/SL showed +150/-100 (old) instead of +200/-150 (new). Volume gate not active.
+
+**Root Cause**: Bots must be restarted after engine.py changes — Python loads modules at startup.
+
+**Fix**: Added `require_volume = True` to per-exchange configs explicitly (not just engine defaults). Restarted all bots. Verified volume gate works (0 trades with Vol=0.0 after restart).
+
+**Lesson**: Always verify running config matches code changes by checking startup log output.
+
+---
+
+## MOM-003: Unlimited Positions + Low Score Threshold = Margin Exhaustion
+
+**Date**: 2026-02-17
+**Evidence**: Extended bot logs showing 9+ positions opened, 100+ failed order attempts/cycle, 4/9 positions closed as losses.
+
+**Root Cause (3 compounding failures)**:
+1. `score_min=2.5` let garbage signals through — BERA at 2.5, RESOLV at 2.6, TRX at 2.9 all opened and lost
+2. `max_positions=0` (unlimited) meant the bot opened on EVERYTHING that passed the low threshold
+3. The `max_positions` config field **existed but was never enforced in the code** — it was a dead setting
+
+**Analysis of Extended's 9 positions**:
+| Asset | Score | Result |
+|-------|-------|--------|
+| ADA | 3.6 | Still open |
+| SOL | 3.6 | Still open |
+| STRK | 3.5 | Still open |
+| ZEC | 3.3 | Still open |
+| KAITO | 3.3 | SL'd SHORT, re-entered LONG |
+| TON | 3.0 | SL'd (-$0.56) |
+| TRX | 2.9 | TIME exit |
+| RESOLV | 2.6 | SL'd (-$0.54) |
+| BERA | 2.5 | TIME exit |
+
+**Pattern**: Positions scoring >= 3.3 survived. Everything below 3.0 was a loss or timed out.
+
+**Volume signal was 0 on 8 of 9 positions** — the bot was trading on RSI/MACD/PA/EMA with zero volume confirmation.
+
+**Resolution**:
+- Raised `score_min` to 3.0 (filters ~80% of marginal signals)
+- Set `max_positions` to 5 per exchange
+- Added position limit enforcement in `_cycle()` (checking sibling bot positions)
+- Added balance pre-check: skip if equity < 1.5x size_usd (eliminates error spam)
+
+**Key Lesson**: Config fields that aren't enforced in code are worse than not having them — they give false confidence. Always verify config values are actually checked in the execution path.
+
+---
+
+## MOM-002: Bot Restart Position Reconciliation + Monitoring
+
+**Date**: 2026-02-17
+**Evidence**: Extended bot died, restarted, opened 8 NEW positions on top of existing orphaned positions. Nado test run opened 5 positions with no bot to manage them. No way to see aggregate position state across exchanges.
+**Root Cause**: Multiple issues:
+1. Bot starts with `position=None` — doesn't check exchange for existing positions. On restart, places new orders on top of existing ones.
+2. Nado `get_equity()` naively added `v_quote_balance` (position cost basis) to spot balance → showed -$477 when real equity was $40.
+3. Extended `close_position()` failed for non-BTC/ETH/SOL because size increments weren't populated without `discover_markets()`.
+4. Extended `get_all_positions()` returned "WIF-USD" (market name) but `close_position()` expected "WIF" (asset name).
+5. Hibachi `get_all_positions()` used wrong field names (`entryPrice` vs actual `openPrice`).
+6. No centralized monitoring across exchanges.
+**Resolution**:
+- Added position reconciliation to `_cycle()`: on each cycle, if bot thinks flat but exchange has a position, adopt it
+- Fixed Nado `get_equity()`: uses `healths[2].assets` from Nado's own PnL health calculation
+- Fixed Extended symbol format mismatch in `get_all_positions()`
+- Fixed Hibachi position field names
+- Created `scripts/monitor.py`: checks all 3 exchanges every 5 min, logs equity/positions/bot status/alerts
+**Key Lesson**: NEVER assume bot state matches exchange state. Always reconcile on startup and periodically.
+
+---
+
+## MOM-001: Momentum Engine Entry Quality — v9 Scoring System
+
+**Date**: 2026-02-17
+**Evidence**: Extended opened 8 positions with old engine (4-signal, threshold 0.4), 7 of 8 were immediately losing. BNB entered at strength=0.48 — garbage.
+**Root Cause**: Old engine used 4 signals (ROC, EMA slope, RSI zone, volume) with weighted average producing 0-1 range. Threshold of 0.4 was far too low — any weak trend triggered entries. No MACD signal, no price action, no momentum confirmation, no position limits.
+**Resolution**: Rewrote engine.py with v9-inspired 5-signal scoring system based on Alpha Arena winning strategy (+22.3% in 17 days):
+- 5 signals (RSI, MACD, Volume, Price Action, EMA), each 0-1, summed 0-5
+- Score >= 2.5/5.0 required to trade (Tier 1 at 2.5, standard 3.0)
+- Direction by RSI+MACD confluence (not majority vote — that caused 2v2 ties)
+- RSI neutral zone (45-55) doesn't vote — prevents false bias
+- Momentum confirmation (HIB-001): last 5m candle must agree with entry
+- No position limit (exchange margin is natural cap)
+- Wider TP/SL: +1.5%/-1.0% (was +0.4%/-0.25%) to avoid noise stops
+- Max hold 2h (was 1h)
+**Key Fix**: Original majority vote direction logic deadlocked: contrarian signals (RSI, PA) always oppose trend-following signals (MACD, EMA). Changed to v9 confluence: RSI+MACD agree (primary), MACD+EMA agree (trend fallback), RSI+PA agree (mean-reversion fallback).
+**Knowledge Gap**: Will the 2.5 threshold produce enough trades? Need to monitor over 24-48h.
 
 > For detailed strategy history, see [research/Learnings.md](research/Learnings.md)
 
@@ -859,3 +1019,78 @@ python3 scripts/hibachi_dashboard.py --watch  # Auto-refresh every 30s
 
 **Pending**: HIB-008 requires 24-hour live test to validate improvements.
 
+
+### WATCHDOG [2026-02-18 17:21]
+- **HIBACHI**: Running correctly with some positions, but the volume signal is zero across all recent trades, which could be a concern.
+
+### WATCHDOG [2026-02-18 17:51]
+- **HIBACHI**: All positions are currently short. The scores for these positions are below the entry threshold (2.6 to 1.9), and the RSI values are low (21.9 to 32.9). These positions should be watched closely as they are in oversold territory and could reverse.
+
+### WATCHDOG [2026-02-18 18:21]
+- **HIBACHI**: All positions are shorts. Given the low RSI values and low volume, these positions may be vulnerable. Watch ETH, BTC, and SOL closely as they have very low scores and could flip trends.
+
+### WATCHDOG [2026-02-18 18:51]
+- **Watch closely**: XRP (RSI=23.7) is the closest to oversold, but still not there. Monitor for a potential trend flip.
+
+### WATCHDOG [2026-02-18 19:22]
+- ** shorts in ETH, BTC, SOL, SUI, XRP**: These positions are based on recent bearish signals. However, the current scores are low, and the volume is minimal, which could be a concern. Watch these positions closely, especially if the market starts to show signs of a trend reversal.
+
+### WATCHDOG [2026-02-18 19:40]
+### Actionable Insight
+
+### WATCHDOG [2026-02-18 20:10]
+1. **HIBACHI**: Running correctly with all processes active. No immediate concerns.
+
+### WATCHDOG [2026-02-18 20:40]
+- **SUI/USDT-P**: RSI is 43.5, neutral. Low volume and price action signals are concerning.
+
+### WATCHDOG [2026-02-18 20:41]
+- **Volume**: Volume signals are mostly low (0.0 for many assets), which is a concern as the system requires a volume signal > 0 to enter trades. This could indicate low liquidity or trading activity.
+
+### WATCHDOG [2026-02-18 22:57]
+- **BTC/USDT-P:** Short position at $66,098.1894. RSI is 72.0, indicating overbought, but signals are weak. Watch for a potential trend flip.
+
+### WATCHDOG [2026-02-18 23:47]
+- **HIBACHI**: Multiple errors related to connectivity issues (APIs not resolving). This is a significant concern and needs immediate attention.
+
+### WATCHDOG [2026-02-19 00:17]
+- **SHORT BTC/USDT-P**: RSI is overbought (65.5), volume is low. Watch for a potential trend flip.
+
+### WATCHDOG [2026-02-19 00:47]
+- **SHORT XRP/USDT-P**: Low volume, watch for trend changes.
+
+### WATCHDOG [2026-02-19 01:18]
+- **Nado**: Running correctly, but low equity ($27.73) is a concern. The system cannot open positions with low notional amounts, which may limit trading opportunities.
+
+### WATCHDOG [2026-02-19 01:48]
+- **AVAX**: Short at $8.8480. Neutral conditions, watch for any signs of a trend reversal.
+
+### WATCHDOG [2026-02-19 02:18]
+- **HIBACHI**: Running correctly. No immediate concerns.
+
+### WATCHDOG [2026-02-19 02:48]
+### ACTIONABLE INSIGHT
+
+### WATCHDOG [2026-02-19 03:19]
+*   **Volume:** Consistently low volume across most assets is a major concern. The volume gate is intended to block trades in these conditions.
+
+### WATCHDOG [2026-02-19 03:49]
+- **HIBACHI**: All systems running correctly. No errors or concerns.
+
+### WATCHDOG [2026-02-19 04:19]
+- **NADO**: No recent trades. The low equity is a concern and may limit future trading opportunities.
+
+### WATCHDOG [2026-02-19 04:49]
+*   NADO's LONG LIT position should be watched closely due to the low equity and ranging market. It represents a large portion of NADOs equity.
+
+### WATCHDOG [2026-02-19 05:20]
+1. **HIBACHI** - Running correctly with no positions. No errors or concerns.
+
+### WATCHDOG [2026-02-19 06:20]
+- **LONG LIT-PERP**: RSI is not provided, but volume is low. This position is also in a thin market and should be watched closely.
+
+### WATCHDOG [2026-02-19 06:51]
+### ACTIONABLE INSIGHT
+
+### WATCHDOG [2026-02-19 07:22]
+- **ETH/USDT-P**: Short position at $1964.20. The market is neutral to slightly oversold, and low volume. This position should be watched closely for any signs of a trend reversal.

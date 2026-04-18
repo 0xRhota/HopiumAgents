@@ -1,0 +1,95 @@
+========================================================================
+TRADE PATTERN ANALYSIS — What Would Have Made Us Better?
+========================================================================
+Total: 734 trades | Winners: 300 | Losers: 434
+Win Rate: 40.9% | Total PnL: $+2098.34
+Avg Win: $+12.5389
+Avg Loss: $-3.8325
+
+── BY EXCHANGE ──
+  hibachi   :  346 trades | WR  35.5% | PnL $    -24.38
+  nado      :  388 trades | WR  45.6% | PnL $  +2122.72
+
+── BY SIDE ──
+  LONG  :  335 trades | WR  41.5% | PnL $  +3078.51
+  SHORT :  399 trades | WR  40.4% | PnL $   -980.17
+    nado/LONG: 192 trades | WR  44.8% | PnL $+3069.49
+    nado/SHORT: 196 trades | WR  46.4% | PnL $ -946.77
+    hibachi/LONG: 143 trades | WR  37.1% | PnL $   +9.02
+    hibachi/SHORT: 203 trades | WR  34.5% | PnL $  -33.40
+
+── BY EXIT REASON ──
+  EMERGENCY_SL   :   12 trades | WR   0.0% | PnL $   -357.39 | Avg hold 1676min
+  SL             :  268 trades | WR   8.6% | PnL $    -95.52 | Avg hold 19min
+  TIME           :   59 trades | WR  66.1% | PnL $     +2.91 | Avg hold 74min
+  TP             :  165 trades | WR  97.0% | PnL $  +2250.45 | Avg hold 50min
+  TREND_FLIP     :  230 trades | WR  33.9% | PnL $   +297.90 | Avg hold 679min
+
+── BY SYMBOL (sorted by PnL) ──
+  LIT     :  40 trades | WR  57.5% | PnL $  +1142.80 🔥
+  ETH     :  71 trades | WR  28.2% | PnL $   +383.78 🔥
+  kBONK   :  25 trades | WR  32.0% | PnL $   +312.69 🔥
+  UNI     :   8 trades | WR  75.0% | PnL $   +210.36 🔥
+  XMR     :  21 trades | WR  42.9% | PnL $   +193.98 🔥
+  ZEC     :  12 trades | WR  58.3% | PnL $   +113.29 🔥
+  PUMP    :  11 trades | WR  63.6% | PnL $   +106.97 🔥
+  AAVE    :  10 trades | WR  60.0% | PnL $   +105.63 🔥
+  XPL     :  12 trades | WR  33.3% | PnL $   +100.63 🔥
+  kPEPE   :  12 trades | WR  25.0% | PnL $   +100.43 🔥
+  WLFI    :  17 trades | WR  23.5% | PnL $    +99.94 🔥
+  BNB     :  47 trades | WR  31.9% | PnL $    +89.51 🔥
+  ASTER   :   4 trades | WR  75.0% | PnL $     +1.24 🔥
+  XAUT    :   1 trades | WR 100.0% | PnL $     +0.30 🔥
+  PENGU   :  10 trades | WR  30.0% | PnL $     -1.00 💀
+  XRP     :  62 trades | WR  43.5% | PnL $     -1.67 💀
+  SOL     :  69 trades | WR  34.8% | PnL $     -6.27 💀
+  SUI     :  75 trades | WR  32.0% | PnL $    -14.90 💀
+  DOGE    :  18 trades | WR  38.9% | PnL $   -101.12 💀
+  TAO     :  17 trades | WR  35.3% | PnL $   -113.61 💀
+  BTC     : 192 trades | WR  48.4% | PnL $   -624.63 💀
+
+── BY V9 SCORE BUCKET ──
+  2.0-2.5:   79 trades | WR  60.8% | PnL $   +110.13
+  2.5-3.0:   66 trades | WR  43.9% | PnL $     -8.04
+  3.0-3.5:  155 trades | WR  32.9% | PnL $   -126.23
+  3.5-4.0:   89 trades | WR  34.8% | PnL $   +319.71
+  4.0-4.5:   90 trades | WR  31.1% | PnL $   -144.15
+  4.5-5.0:  162 trades | WR  40.1% | PnL $   -217.85
+
+── BY HOLD TIME ──
+  0-5min    :  105 trades | WR  33.3% | PnL $  +1655.15
+  5-15min   :  150 trades | WR  40.7% | PnL $    -10.05
+  15-60min  :  181 trades | WR  47.0% | PnL $   +294.86
+  1-4hr     :  120 trades | WR  36.7% | PnL $    -25.18
+  4-24hr    :  149 trades | WR  36.2% | PnL $   +178.48
+  24hr+     :   29 trades | WR  72.4% | PnL $     +5.08
+
+── BY TREND STRENGTH (ROC) ──
+  0-5bps    :    9 trades | WR  33.3% | PnL $     -2.08
+  5-10bps   :    9 trades | WR   0.0% | PnL $     -1.93
+  10-20bps  :   32 trades | WR  53.1% | PnL $     +9.35
+  20-50bps  :   96 trades | WR  26.0% | PnL $    +89.06
+  50+bps    :  146 trades | WR  39.7% | PnL $     -8.46
+
+── SIMULATED FILTERS (what if we had filtered?) ──
+Filter                                    Trades      WR          PnL    vs Base
+------------------------------------------------------------------------------
+  remove_worst_syms(BTC,DOGE,SOL,SUI,TAO)     363   40.2% $  +2958.87 $ +860.53
+  top_syms_only(AAVE,BTC,LIT,PUMP,ZEC)       265   51.3% $   +844.06 $-1254.28
+  hold_min_15min                             479   42.6% $   +453.24 $-1645.10
+  only_trend_flip_exits                      230   33.9% $   +297.90 $-1800.44
+  roc_min_10bps                              283   36.7% $    +86.64 $-2011.70
+  score>=3.5_AND_hold>=15min                 254   37.8% $    +61.44 $-2036.90
+  score_min_3.5                              377   36.3% $    -48.24 $-2146.58
+  score_min_4.0                              288   36.8% $   -367.94 $-2466.28
+  nado_short_only+hibachi_all                542   39.5% $   -971.15 $-3069.49
+
+── KEY TAKEAWAYS ──
+  Best filter: remove_worst_syms(BTC,DOGE,SOL,SUI,TAO)
+    → 363 trades, 40.2% WR, $+2958.87 PnL
+    → $+860.53 improvement over baseline
+  Best exchange: nado ($+2122.72)
+  LONG: WR=41.5%, PnL=$+3078.51
+  SHORT: WR=40.4%, PnL=$-980.17
+
+========================================================================

@@ -1,0 +1,68 @@
+[
+  {
+    "step": "1_BEFORE_OPEN",
+    "ts": 1775752171.544509,
+    "equity": 25.391843,
+    "balance": -14.400988,
+    "positions": [],
+    "position_count": 0
+  },
+  {
+    "step": "2_OPEN_ORDER",
+    "ts": 1775752172.3470159,
+    "symbol": "ETH-PERP",
+    "side": "SHORT",
+    "size": 0.045,
+    "oracle_at_entry": 2211.33,
+    "estimated_notional": 99.51,
+    "order_result": "success"
+  },
+  {
+    "step": "3_AFTER_OPEN",
+    "ts": 1775752176.559721,
+    "equity": 25.368825,
+    "balance": -14.400988,
+    "positions": [
+      {
+        "symbol": "ETH-PERP",
+        "side": "SHORT",
+        "size": 0.045,
+        "oracle": 2211.3337,
+        "notional": 99.51,
+        "upnl": -0.023
+      }
+    ],
+    "position_count": 1
+  },
+  {
+    "step": "4_EXCHANGE_PNL_AFTER_OPEN",
+    "ts": 1775752177.981858,
+    "trade_count": 5,
+    "realized_pnl": 0.1006,
+    "fees": 0.181331
+  },
+  {
+    "step": "5_CLOSE_ORDER",
+    "ts": 1775752188.456259,
+    "symbol": "ETH-PERP",
+    "side": "BUY (close short)",
+    "size": 0.045,
+    "order_result": "success"
+  },
+  {
+    "step": "6_AFTER_CLOSE",
+    "ts": 1775752192.655862,
+    "equity": 25.366831,
+    "balance": -14.400988,
+    "positions": [],
+    "position_count": 0
+  },
+  {
+    "step": "7_EXCHANGE_PNL_AFTER_CLOSE",
+    "ts": 1775752194.186389,
+    "trade_count": 6,
+    "realized_pnl": 0.1456,
+    "fees": 0.216343,
+    "net_pnl": -0.070743
+  }
+]

@@ -1,0 +1,358 @@
+{
+  "A_fast_scalp_v9": {
+    "name": "Fast Scalp (v9 engine)",
+    "engine": "v9",
+    "trades": 1672,
+    "daily_trades": 55.8,
+    "total_volume": 334400,
+    "daily_volume": 11150.54,
+    "total_pnl": -19.5464,
+    "daily_pnl": -0.6518,
+    "win_rate": 35.0,
+    "rr_ratio": 1.77,
+    "max_drawdown": 41.49,
+    "avg_win": 0.6908,
+    "avg_loss": -0.3898,
+    "by_reason": {
+      "SL": {
+        "count": 1047,
+        "pnl": -418.7999999999933
+      },
+      "TP": {
+        "count": 462,
+        "pnl": 369.6000000000031
+      },
+      "TIME": {
+        "count": 163,
+        "pnl": 29.6536
+      }
+    }
+  },
+  "B_baseline_v9": {
+    "name": "Baseline v9",
+    "engine": "v9",
+    "trades": 417,
+    "daily_trades": 13.9,
+    "total_volume": 83400,
+    "daily_volume": 2780.97,
+    "total_pnl": 3.6042,
+    "daily_pnl": 0.1202,
+    "win_rate": 40.8,
+    "rr_ratio": 1.47,
+    "max_drawdown": 33.38,
+    "avg_win": 1.4687,
+    "avg_loss": -0.9963,
+    "by_reason": {
+      "TP": {
+        "count": 165,
+        "pnl": 247.5
+      },
+      "SL": {
+        "count": 246,
+        "pnl": -246.0
+      },
+      "TIME": {
+        "count": 6,
+        "pnl": 2.1041999999999996
+      }
+    }
+  },
+  "F_patient_v9": {
+    "name": "Patient Winner (v9)",
+    "engine": "v9",
+    "trades": 212,
+    "daily_trades": 7.1,
+    "total_volume": 42400,
+    "daily_volume": 1413.82,
+    "total_pnl": 25.9271,
+    "daily_pnl": 0.8645,
+    "win_rate": 47.2,
+    "rr_ratio": 1.29,
+    "max_drawdown": 26.2,
+    "avg_win": 1.9371,
+    "avg_loss": -1.498,
+    "by_reason": {
+      "TP": {
+        "count": 96,
+        "pnl": 192.0
+      },
+      "SL": {
+        "count": 111,
+        "pnl": -166.5
+      },
+      "TIME": {
+        "count": 5,
+        "pnl": 0.42710000000000004
+      }
+    }
+  },
+  "G_research_scalp": {
+    "name": "Research Scalp (MACD 8/17/9, RSI 7, BB)",
+    "engine": "research",
+    "trades": 1856,
+    "daily_trades": 61.9,
+    "total_volume": 371200,
+    "daily_volume": 12377.63,
+    "total_pnl": -10.8343,
+    "daily_pnl": -0.3613,
+    "win_rate": 36.0,
+    "rr_ratio": 1.73,
+    "max_drawdown": 37.96,
+    "avg_win": 0.6676,
+    "avg_loss": -0.3854,
+    "by_reason": {
+      "SL": {
+        "count": 1120,
+        "pnl": -447.99999999999164
+      },
+      "TIME": {
+        "count": 229,
+        "pnl": 31.565700000000014
+      },
+      "TP": {
+        "count": 507,
+        "pnl": 405.6000000000036
+      }
+    }
+  },
+  "H_research_balanced": {
+    "name": "Research Balanced (tuned indicators)",
+    "engine": "research",
+    "trades": 456,
+    "daily_trades": 15.2,
+    "total_volume": 91200,
+    "daily_volume": 3041.06,
+    "total_pnl": -31.6333,
+    "daily_pnl": -1.0548,
+    "win_rate": 37.1,
+    "rr_ratio": 1.51,
+    "max_drawdown": 42.63,
+    "avg_win": 1.4923,
+    "avg_loss": -0.989,
+    "by_reason": {
+      "TP": {
+        "count": 167,
+        "pnl": 250.5
+      },
+      "SL": {
+        "count": 283,
+        "pnl": -283.0
+      },
+      "TIME": {
+        "count": 6,
+        "pnl": 0.8667
+      }
+    }
+  },
+  "I_partial_tp": {
+    "name": "Partial TP (1.5% \u2192 3%, SL to BE)",
+    "engine": "research",
+    "trades": 1007,
+    "daily_trades": 33.6,
+    "total_volume": 146200.0,
+    "daily_volume": 4875.03,
+    "total_pnl": 13.3073,
+    "daily_pnl": 0.4437,
+    "win_rate": 56.5,
+    "rr_ratio": 0.79,
+    "max_drawdown": 22.09,
+    "avg_win": 0.7497,
+    "avg_loss": -0.9435,
+    "by_reason": {
+      "SL": {
+        "count": 416,
+        "pnl": -407.5
+      },
+      "TP1": {
+        "count": 276,
+        "pnl": 207.0
+      },
+      "TP2": {
+        "count": 251,
+        "pnl": 196.5
+      },
+      "TIME": {
+        "count": 64,
+        "pnl": 17.3073
+      }
+    }
+  },
+  "J_adaptive_scalper": {
+    "name": "Adaptive Scalper (research composite)",
+    "engine": "research",
+    "trades": 653,
+    "daily_trades": 21.8,
+    "total_volume": 110200.0,
+    "daily_volume": 3674.61,
+    "total_pnl": 7.5699,
+    "daily_pnl": 0.2524,
+    "win_rate": 54.2,
+    "rr_ratio": 0.87,
+    "max_drawdown": 31.41,
+    "avg_win": 0.6243,
+    "avg_loss": -0.7138,
+    "by_reason": {
+      "TP1": {
+        "count": 102,
+        "pnl": 76.5
+      },
+      "TP2": {
+        "count": 81,
+        "pnl": 63.0
+      },
+      "SL": {
+        "count": 173,
+        "pnl": -172.5
+      },
+      "TIME": {
+        "count": 297,
+        "pnl": 40.569899999999976
+      }
+    }
+  },
+  "K_high_vol_research": {
+    "name": "Volume King (research engine)",
+    "engine": "research",
+    "trades": 3391,
+    "daily_trades": 113.1,
+    "total_volume": 678200,
+    "daily_volume": 22614.52,
+    "total_pnl": -62.6706,
+    "daily_pnl": -2.0897,
+    "win_rate": 40.0,
+    "rr_ratio": 1.38,
+    "max_drawdown": 91.93,
+    "avg_win": 0.5264,
+    "avg_loss": -0.3825,
+    "by_reason": {
+      "SL": {
+        "count": 1895,
+        "pnl": -757.9999999999741
+      },
+      "TP": {
+        "count": 1109,
+        "pnl": 665.4000000000137
+      },
+      "TIME": {
+        "count": 387,
+        "pnl": 29.929400000000008
+      }
+    }
+  },
+  "L_asymmetric_research": {
+    "name": "Asymmetric 3:1 (research engine)",
+    "engine": "research",
+    "trades": 1408,
+    "daily_trades": 46.9,
+    "total_volume": 281600,
+    "daily_volume": 9389.93,
+    "total_pnl": -16.9915,
+    "daily_pnl": -0.5666,
+    "win_rate": 29.8,
+    "rr_ratio": 2.27,
+    "max_drawdown": 38.1,
+    "avg_win": 1.103,
+    "avg_loss": -0.4861,
+    "by_reason": {
+      "SL": {
+        "count": 948,
+        "pnl": -474.0
+      },
+      "TIME": {
+        "count": 209,
+        "pnl": 80.50850000000003
+      },
+      "TP": {
+        "count": 251,
+        "pnl": 376.5
+      }
+    }
+  },
+  "M_long_only_research": {
+    "name": "LONG Only (research engine)",
+    "engine": "research",
+    "trades": 1020,
+    "daily_trades": 34.0,
+    "total_volume": 204000,
+    "daily_volume": 6802.36,
+    "total_pnl": -22.9252,
+    "daily_pnl": -0.7644,
+    "win_rate": 38.6,
+    "rr_ratio": 1.49,
+    "max_drawdown": 38.9,
+    "avg_win": 0.8525,
+    "avg_loss": -0.5732,
+    "by_reason": {
+      "SL": {
+        "count": 587,
+        "pnl": -352.2000000000019
+      },
+      "TP": {
+        "count": 312,
+        "pnl": 312.0
+      },
+      "TIME": {
+        "count": 121,
+        "pnl": 17.274800000000003
+      }
+    }
+  },
+  "N_short_only_research": {
+    "name": "SHORT Only (research engine)",
+    "engine": "research",
+    "trades": 913,
+    "daily_trades": 30.4,
+    "total_volume": 182600,
+    "daily_volume": 6088.78,
+    "total_pnl": 27.7927,
+    "daily_pnl": 0.9267,
+    "win_rate": 41.6,
+    "rr_ratio": 1.53,
+    "max_drawdown": 34.95,
+    "avg_win": 0.8718,
+    "avg_loss": -0.5694,
+    "by_reason": {
+      "SL": {
+        "count": 491,
+        "pnl": -294.59999999999974
+      },
+      "TP": {
+        "count": 303,
+        "pnl": 303.0
+      },
+      "TIME": {
+        "count": 119,
+        "pnl": 19.392700000000012
+      }
+    }
+  },
+  "O_patient_research": {
+    "name": "Patient Winner (research engine)",
+    "engine": "research",
+    "trades": 220,
+    "daily_trades": 7.3,
+    "total_volume": 44000,
+    "daily_volume": 1467.18,
+    "total_pnl": -14.354,
+    "daily_pnl": -0.4786,
+    "win_rate": 41.4,
+    "rr_ratio": 1.31,
+    "max_drawdown": 36.85,
+    "avg_win": 1.9686,
+    "avg_loss": -1.5,
+    "by_reason": {
+      "TP": {
+        "count": 89,
+        "pnl": 178.0
+      },
+      "SL": {
+        "count": 129,
+        "pnl": -193.5
+      },
+      "TIME": {
+        "count": 2,
+        "pnl": 1.146
+      }
+    }
+  }
+}
