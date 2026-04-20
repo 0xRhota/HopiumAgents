@@ -69,12 +69,29 @@ Tests: 55/55 pass. Run `python3 -m pytest tests/reconciliation/ -v`.
 
 ## Outstanding Priority Work
 
-1. **Backtest simulator — SHIPPED 2026-04-20**. See `core/backtest/`, `scripts/run_backtest.py`, `scripts/validate_strategy.py`. 38 tests pass. First live validation run 2026-04-20: **sim under-trades vs live** (0 sim fills vs 42 live over 7d on Hibachi BTC). Root cause: sim hardcodes `post_only=True` but Hibachi doesn't support POST_ONLY, so sim orders get rejected while live uses regular limits.
+1. **Backtest simulator — SHIPPED 2026-04-20**. See `core/backtest/`, `scripts/run_backtest.py`, `scripts/validate_strategy.py`, `scripts/strategy_sweep.py`. 108 tests pass.
+
+   **Major finding 2026-04-20 from full Nado sweep (33 symbols × 2 configs × 30d):**
+   - FAST preset (current live: score≥2.5, 80/40 bps): **0 of 33 symbols profitable**, aggregate NET **−$1,568**
+   - SLOW preset (Paradex-style: score≥3.5, ATR×3/×1.5, 10% size): **4 of 33 profitable**, aggregate NET **−$635**
+   - Slow saves $933 of bleed (60% less loss) vs fast
+   - Winning symbols on slow: **AAVE +$16, AVAX +$12, UNI +$2, ETH +$2** (30d). Near break-even: ZRO, SKY.
+   - Disproven: user hypothesis that lower-liq/newer symbols have edge. The edge lives in established mid-caps; newer tokens (PUMP, PENGU, WLFI) are catastrophic bleeders.
+   - Saved: `logs/sweeps/nado_sweep_20260420T163031.csv`
 
    **Calibration tasks before sim is trusted:**
    - Make `post_only` decision exchange-aware in BacktestMomentumStrategy (Hibachi → False, Nado/Paradex → True)
-   - Strengthen `compare_pnl` to fail when trade-count divergence > X% (currently passes on $0.34 even though sim=0 trades)
-   - Re-run validation; repeat until convergence within $1 on all three exchanges
+   - Strengthen `compare_pnl` to fail when trade-count divergence > X%
+   - Re-run validation on Nado AAVE; close gap before trusting sweep $ figures
+   - PUMP/PENGU 0% WR likely a kilo-token Binance mapping bug, not strategy finding
+
+2. **Maker-only close — SHIPPED 2026-04-20.** Removed `create_market_order` fallback on Hibachi + Nado close paths. Widening-limit loop instead. 3 regression tests verify no market orders called. User directive: no taker fees ever.
+
+3. **ATR-adaptive TP/SL — SHIPPED 2026-04-20.** Replaced fixed 80/40 bps with `TP = max(60bps, 2×ATR), SL = max(30bps, 1×ATR)`. Live on Hibachi + Nado. Startup banner + per-symbol score log now show ATR values.
+
+4. **Nado live symbol discovery — SHIPPED 2026-04-20.** Added `NadoSDK.fetch_symbols_map()` querying `/symbols` endpoint with 1h TTL. Bot discovered +32 markets that hardcoded dict missed (AAPL, AMZN, MSFT, GOOGL, META, NVDA, TSLA + QQQ, SPY, EURUSD, GBPUSD, USDJPY, XAG, WTI + 15 alt-coins).
+
+5. **Hibachi pagination — SHIPPED 2026-04-20.** Reconciler now pages `/trade/account/trades` via `endTime` cursor; can fetch real 14d window instead of top-100 cap.
 
 2. **Phase 4 — rip out lying PnL code** after 48h soak confirms reconciler accuracy. Checklist in `docs/CLEANUP_AFTER_CONFIRMATION.md`.
 2. **Fund Hibachi** — at $22.81, bleeding slowly.

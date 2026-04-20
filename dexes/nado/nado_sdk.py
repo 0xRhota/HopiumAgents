@@ -122,9 +122,12 @@ class NadoSDK:
             self.chain_id = self.MAINNET_CHAIN_ID
             self.verifying_contract = self.MAINNET_VERIFYING_CONTRACT
 
-        # Cache for products
+        # Cache for products + live symbol discovery
         self._products_cache: Optional[List[Dict]] = None
         self._products_cache_time: float = 0
+        self._symbols_cache: Optional[Dict[int, str]] = None
+        self._symbols_cache_time: float = 0
+        self._symbols_ttl: float = 3600.0  # 1 hour
 
     def _get_subaccount_bytes32(self) -> str:
         """
@@ -439,6 +442,38 @@ class NadoSDK:
 
     # ===== Public Query Methods =====
 
+    async def fetch_symbols_map(self, force_refresh: bool = False) -> Dict[int, str]:
+        """Return live {product_id: symbol} mapping from Nado /symbols endpoint.
+
+        Falls back to the hardcoded PRODUCT_SYMBOLS dict if the API call fails.
+        Cached for self._symbols_ttl seconds (default 1h).
+        """
+        if (
+            not force_refresh
+            and self._symbols_cache is not None
+            and (time.time() - self._symbols_cache_time < self._symbols_ttl)
+        ):
+            return self._symbols_cache
+
+        resp = await self._query("symbols")
+        if resp.get("status") == "success":
+            raw = resp.get("data", {}).get("symbols", {}) or {}
+            mapping: Dict[int, str] = {}
+            for symbol, meta in raw.items():
+                pid = meta.get("product_id")
+                if pid is not None:
+                    mapping[pid] = symbol
+            if mapping:
+                self._symbols_cache = mapping
+                self._symbols_cache_time = time.time()
+                return mapping
+
+        # Fallback to legacy hardcoded dict — keeps bot alive if API is down.
+        logger.warning("[nado] /symbols endpoint failed; falling back to PRODUCT_SYMBOLS")
+        if self._symbols_cache is not None:
+            return self._symbols_cache
+        return dict(self.PRODUCT_SYMBOLS)
+
     async def get_products(self, force_refresh: bool = False) -> List[Dict]:
         """
         Get all available products (markets)
@@ -457,10 +492,11 @@ class NadoSDK:
             # Nado returns perp_products and spot_products arrays
             perp_products = data.get("perp_products", [])
 
-            # Add symbols from our mapping
+            # Attach live symbol via /symbols endpoint (falls back to hardcoded)
+            sym_map = await self.fetch_symbols_map()
             for p in perp_products:
                 product_id = p.get("product_id")
-                p["symbol"] = self.PRODUCT_SYMBOLS.get(product_id, f"UNKNOWN-{product_id}")
+                p["symbol"] = sym_map.get(product_id, f"UNKNOWN-{product_id}")
                 # Parse oracle price for convenience
                 oracle_price_x18 = p.get("oracle_price_x18", "0")
                 p["oracle_price"] = self._from_x18(int(oracle_price_x18))

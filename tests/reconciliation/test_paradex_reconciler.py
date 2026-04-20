@@ -196,7 +196,8 @@ async def test_snapshot_ts_is_utc(mock_client):
 @pytest.mark.asyncio
 async def test_pnl_window_sums_fills(mock_client):
     r = ParadexReconciler(client=mock_client)
-    w = await r.get_pnl_window(hours=24)
+    # Large window so fills fixture stays in range as time passes
+    w = await r.get_pnl_window(hours=24 * 365)
     # realized: 0 + 0.014014 = 0.014014
     # fees: 0.00209 + (-0.001046) = 0.001046 paid
     # funding: 0 + 0.0000883 = 0.0000883 received (paradex sign: positive = received)
