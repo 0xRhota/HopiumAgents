@@ -281,23 +281,24 @@ class MomentumBot:
             config.tp_bps = 80.0         # fallback if ATR missing
             config.sl_bps = 40.0
         elif exchange == "nado":
-            config.min_notional = 100.0  # Nado exchange minimum
-            config.leverage = 10.0       # Nado 10x leverage
-            config.max_positions = 2     # 2×$100 = $200/$500 = 40% margin
-            config.size_pct = 20.0       # $100 per trade on $50 at 10x
-            config.max_hold_minutes = 120.0
-            config.score_min = 2.5
+            # SLOW preset (2026-04-20). Sweep showed fast=0/7 profitable,
+            # slow=4/7. Restricted universe AAVE/AVAX/ETH — launch with
+            # --assets AAVE,AVAX,ETH to enforce.
+            config.min_notional = 100.0
+            config.leverage = 10.0
+            config.max_positions = 2
+            config.size_pct = 10.0         # ↓ from 20 — slow preset
+            config.max_hold_minutes = 480.0  # ↑ from 120 — let winners run
+            config.score_min = 3.5           # ↑ from 2.5 — high conviction only
             config.require_volume = False
-            config.offset_bps = 5.0      # Tighter offset for faster fills
-            # ATR-adaptive exits (2026-04-20). Addresses LIT/SUI chop-outs
-            # at fixed 40 bps SL — let microstructure-tight markets breathe.
+            config.offset_bps = 5.0
             config.use_atr_exits = True
-            config.tp_atr_mult = 2.0
-            config.sl_atr_mult = 1.0
-            config.tp_bps_floor = 60.0
-            config.sl_bps_floor = 30.0
-            config.tp_bps = 80.0
-            config.sl_bps = 40.0
+            config.tp_atr_mult = 3.0         # ↑ from 2.0
+            config.sl_atr_mult = 1.5         # ↑ from 1.0
+            config.tp_bps_floor = 150.0      # ↑ from 60
+            config.sl_bps_floor = 75.0       # ↑ from 30
+            config.tp_bps = 300.0            # fallback if ATR missing
+            config.sl_bps = 200.0
         elif exchange == "extended":
             config.leverage = 10.0       # Extended 10x leverage
 

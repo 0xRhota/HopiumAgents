@@ -36,7 +36,8 @@ async def main():
     ap.add_argument("--days", type=int, default=7)
     ap.add_argument("--tolerance-usd", type=float, default=1.0)
     ap.add_argument("--tolerance-pct", type=float, default=0.05)
-    ap.add_argument("--score-min", type=float, default=2.5)
+    ap.add_argument("--preset", choices=["fast", "slow"], default="fast",
+                    help="Strategy preset to simulate (must match what live runs)")
     args = ap.parse_args()
 
     bars = fetch_binance_klines(args.symbol, args.days)
@@ -44,7 +45,10 @@ async def main():
         print(f"Not enough bars ({len(bars)})")
         sys.exit(2)
 
-    strategy = BacktestMomentumStrategy(symbol=args.symbol, score_min=args.score_min)
+    strategy = BacktestMomentumStrategy(
+        symbol=args.symbol, preset=args.preset,
+        exchange=args.exchange,  # enables self-learning + cooldown from live history
+    )
     sim_fills = run_backtest(
         strategy=strategy, bars=bars,
         exchange=_EX_MAP[args.exchange],

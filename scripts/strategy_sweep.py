@@ -63,7 +63,8 @@ def _run_one(symbol: str, preset: str, exchange_spec, days: int):
     if len(bars) < 100:
         return None  # Binance returned no data or too little
 
-    strategy = BacktestMomentumStrategy(symbol=symbol, preset=preset)
+    strategy = BacktestMomentumStrategy(symbol=symbol, preset=preset,
+                                         exchange=exchange_spec.name)
     fills = run_backtest(
         strategy=strategy, bars=bars, exchange=exchange_spec,
         starting_equity=100.0, leverage=10.0,
