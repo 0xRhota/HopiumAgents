@@ -41,6 +41,15 @@ class MomentumConfig:
     tp_bps: float = 80.0           # Take profit (0.8%) — fast recycling
     sl_bps: float = 40.0           # Stop loss (0.4%) — cut losers quick
     max_hold_minutes: float = 120.0 # 2hr max hold — force recycle capital
+    # Adaptive ATR-scaled exits (2026-04-20). When enabled, TP/SL scale with
+    # asset volatility. High-vol assets get wider exits, low-vol tighter.
+    # Floors prevent ultra-tight exits when market is very calm.
+    use_atr_exits: bool = False     # Toggle to opt-in per-exchange
+    tp_atr_mult: float = 2.0         # TP = max(floor, mult × ATR_bps)
+    sl_atr_mult: float = 1.0         # SL = max(floor, mult × ATR_bps)
+    tp_bps_floor: float = 30.0       # Don't go below this even if ATR is tiny
+    sl_bps_floor: float = 15.0
+    atr_period: int = 14             # Classic Wilder ATR lookback
 
 
 class MomentumEngine:
@@ -69,7 +78,7 @@ class MomentumEngine:
         empty = {
             "direction": "NONE", "score": 0.0, "strength": 0.0,
             "roc_bps": 0.0, "ema_diff_bps": 0.0, "rsi": 50.0,
-            "vol_ratio": 1.0, "scoring": "insufficient data",
+            "vol_ratio": 1.0, "atr_bps": 0.0, "scoring": "insufficient data",
         }
         if df is None or len(df) < 30:
             return empty
@@ -77,6 +86,23 @@ class MomentumEngine:
         close = df["close"].values
         high = df["high"].values
         low = df["low"].values
+
+        # ── ATR (Average True Range) in bps ───────────────────────
+        # Wilder-style simple avg over atr_period; not EMA (close enough).
+        period = max(2, self.config.atr_period)
+        if len(close) > period:
+            trs = []
+            for i in range(1, len(close)):
+                tr = max(
+                    high[i] - low[i],
+                    abs(high[i] - close[i-1]),
+                    abs(low[i] - close[i-1]),
+                )
+                trs.append(tr)
+            atr_abs = sum(trs[-period:]) / period
+            atr_bps = (atr_abs / close[-1]) * 10000 if close[-1] else 0.0
+        else:
+            atr_bps = 0.0
         volume = df["volume"].values
         close_s = pd.Series(close)
 
@@ -249,6 +275,7 @@ class MomentumEngine:
             "ema_diff_bps": round(ema_diff_bps, 2),
             "rsi": round(rsi_val, 1),
             "vol_ratio": round(vol_ratio, 2),
+            "atr_bps": round(atr_bps, 2),
             "scoring": scoring_str,
         }
 
@@ -305,8 +332,21 @@ class MomentumEngine:
                     return "TREND_FLIP"
             return None
 
+        # Determine effective TP/SL bps.
+        # If use_atr_exits is True AND trend dict carries atr_bps, scale exits
+        # to asset volatility. Floors prevent ultra-tight exits in calm markets.
+        if self.config.use_atr_exits and trend and trend.get("atr_bps", 0) > 0:
+            atr_bps = trend["atr_bps"]
+            eff_tp_bps = max(self.config.tp_bps_floor,
+                             atr_bps * self.config.tp_atr_mult)
+            eff_sl_bps = max(self.config.sl_bps_floor,
+                             atr_bps * self.config.sl_atr_mult)
+        else:
+            eff_tp_bps = self.config.tp_bps
+            eff_sl_bps = self.config.sl_bps
+
         # 1. Take Profit — lock in gains fast
-        tp = self.config.tp_bps / 10000.0
+        tp = eff_tp_bps / 10000.0
         if tp > 0:
             if direction == "LONG" and current_price >= entry_price * (1 + tp):
                 return "TP"
@@ -314,7 +354,7 @@ class MomentumEngine:
                 return "TP"
 
         # 2. Stop Loss — cut losers quick
-        sl = self.config.sl_bps / 10000.0
+        sl = eff_sl_bps / 10000.0
         if sl > 0:
             if direction == "LONG" and current_price <= entry_price * (1 - sl):
                 return "SL"

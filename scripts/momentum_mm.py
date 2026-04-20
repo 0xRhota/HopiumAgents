@@ -267,22 +267,37 @@ class MomentumBot:
             config.leverage = 5.0        # Hibachi 5x leverage
             config.max_positions = 3     # 3×$50 = $150/$250 = 60% margin
             config.size_pct = 33.0       # ~$50 per trade on $30 account at 5x
-            config.tp_bps = 80.0         # 0.8% TP
-            config.sl_bps = 40.0         # 0.4% SL
             config.max_hold_minutes = 120.0
             config.score_min = 2.5
             config.require_volume = False
+            # ATR-adaptive exits (2026-04-20). Replace fixed 80/40 bps so
+            # low-vol assets (SUI) don't get chopped by fixed-distance SL
+            # and high-vol assets (TAO) get appropriate room to breathe.
+            config.use_atr_exits = True
+            config.tp_atr_mult = 2.0
+            config.sl_atr_mult = 1.0
+            config.tp_bps_floor = 60.0   # never tighter than 60 bps TP
+            config.sl_bps_floor = 30.0   # never tighter than 30 bps SL
+            config.tp_bps = 80.0         # fallback if ATR missing
+            config.sl_bps = 40.0
         elif exchange == "nado":
             config.min_notional = 100.0  # Nado exchange minimum
             config.leverage = 10.0       # Nado 10x leverage
             config.max_positions = 2     # 2×$100 = $200/$500 = 40% margin
             config.size_pct = 20.0       # $100 per trade on $50 at 10x
-            config.tp_bps = 80.0         # 0.8% TP
-            config.sl_bps = 40.0         # 0.4% SL
             config.max_hold_minutes = 120.0
             config.score_min = 2.5
             config.require_volume = False
             config.offset_bps = 5.0      # Tighter offset for faster fills
+            # ATR-adaptive exits (2026-04-20). Addresses LIT/SUI chop-outs
+            # at fixed 40 bps SL — let microstructure-tight markets breathe.
+            config.use_atr_exits = True
+            config.tp_atr_mult = 2.0
+            config.sl_atr_mult = 1.0
+            config.tp_bps_floor = 60.0
+            config.sl_bps_floor = 30.0
+            config.tp_bps = 80.0
+            config.sl_bps = 40.0
         elif exchange == "extended":
             config.leverage = 10.0       # Extended 10x leverage
 
