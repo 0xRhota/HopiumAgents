@@ -50,6 +50,18 @@
 - [ ] When building the Paradex momentum adapter (plan Phase 1+), use POST_ONLY exclusively. Do NOT let it fall back to taker. If POST_ONLY rejects, skip the cycle.
 - [ ] Current `scripts/paradex_gpt_live.py` Qwen bot also places takers. Either switch it to POST_ONLY or decommission it when momentum adapter ships.
 
+### Old backtest scripts to retire once new sim is trusted
+
+Trust gate: `scripts/validate_strategy.py` must return exit 0 on ≥1 symbol. Then retire the below because they all use the lying gross `pnl` from JSONL:
+
+- [ ] `scripts/backtest_momentum.py` — uses lying gross PnL
+- [ ] `scripts/strategy_backtest.py` — same
+- [ ] `scripts/strategy_backtest_v2.py` — same
+- [ ] `scripts/mcp_backtest.py` — same
+- [ ] `scripts/self_learning_backtest.py` — review separately (uses same field for WR calc)
+
+Replace callers with `python3 scripts/run_backtest.py --symbol X --exchange Y` and read results from emitted Fill records.
+
 ### Hibachi SDK
 
 - [ ] `dexes/hibachi/hibachi_sdk.py:564` — update comment that says "POST_ONLY (ALO) is documented ... but not exposed in the API" once we DO expose it.

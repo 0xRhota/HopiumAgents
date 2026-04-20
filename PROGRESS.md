@@ -69,7 +69,8 @@ Tests: 55/55 pass. Run `python3 -m pytest tests/reconciliation/ -v`.
 
 ## Outstanding Priority Work
 
-1. **Phase 4 — rip out lying PnL code** after 48h soak confirms reconciler accuracy. Checklist in `docs/CLEANUP_AFTER_CONFIRMATION.md`.
+1. **Backtest simulator — SHIPPED 2026-04-20**. See `core/backtest/`, `scripts/run_backtest.py`, `scripts/validate_strategy.py`. 38 tests pass. First live smoke test: 1d BTC-PERP on Nado → NET −$1.22 (matches live bleed pattern). Trust gate needs first live validation run (Task T12 pending).
+2. **Phase 4 — rip out lying PnL code** after 48h soak confirms reconciler accuracy. Checklist in `docs/CLEANUP_AFTER_CONFIRMATION.md`.
 2. **Fund Hibachi** — at $22.81, bleeding slowly.
 3. **Map 29 new Nado products** — includes 14 equity perps (AAPL/TSLA/NVDA/etc.). `dexes/nado/nado_sdk.py PRODUCT_SYMBOLS`.
 4. **1H EMA trend filter** — backtest showed +$0.37/day lift, not in live bot.

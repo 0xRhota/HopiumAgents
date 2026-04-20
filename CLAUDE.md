@@ -58,6 +58,24 @@ net_pnl         realized - fee (per-fill) OR realized - fees - funding (window)
 
 Paradex returns `realized_funding` positive=received — we INVERT when mapping to `funding_paid`.
 
+## Backtest simulator (2026-04-20)
+
+**Lives at:** `core/backtest/` — Portfolio, ExchangeSim, runner, momentum_strategy, walk_forward, kelly, grid_search, compare. 38 tests in `tests/backtest/`.
+
+**CLI:**
+- `python3 scripts/run_backtest.py --symbol BTC-PERP --exchange nado --days 14` — backtest momentum on Binance klines with per-exchange fees + POST_ONLY rejection
+- `python3.11 scripts/validate_strategy.py --exchange hibachi --symbol BTC/USDT-P --days 7` — **THE TRUST GATE**: compares sim PnL to live ledger PnL. Exit 0 = trustworthy.
+
+**Output schema:** `core.reconciliation.base.Fill` — same as live ledger. Sim and live are directly comparable.
+
+**Trust protocol — BEFORE deploying any new strategy:**
+1. Run `run_backtest.py` over last 30d → sim_fills
+2. Paper-trade live 3-7 days → ledger_fills
+3. Run `validate_strategy.py` → if divergence > $1 AND > 5%, DO NOT deploy
+4. After 14d soak with passing divergence: trusted
+
+**Old backtest scripts** (`scripts/backtest_momentum.py`, `strategy_backtest*.py`, `mcp_backtest.py`) use the lying gross `pnl` field. Retire after trust gate passes — see `docs/CLEANUP_AFTER_CONFIRMATION.md`.
+
 ## Commands
 
 ```bash
