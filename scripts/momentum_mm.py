@@ -404,7 +404,8 @@ class MomentumBot:
         if self.cycle_count % 5 == 1:  # Log every 5th cycle
             logger.info(
                 f"{tag} Score={trend['score']}/5.0 [{trend['scoring']}] "
-                f"→ {trend['direction']} RSI={trend['rsi']} vol={trend['vol_ratio']:.1f}x"
+                f"→ {trend['direction']} RSI={trend['rsi']} vol={trend['vol_ratio']:.1f}x "
+                f"ATR={trend.get('atr_bps', 0):.1f}bps"
             )
 
         # 3. Hourly equity snapshot (skip if multi-asset runner handles this)
@@ -730,7 +731,14 @@ async def run_multi(
     logger.info(f"  Assets: {asset_list}")
     logger.info(f"  Score threshold: {cfg.score_min}/5.0")
     logger.info(f"  Max positions: {cfg.max_positions}")
-    logger.info(f"  Exit: TP={cfg.tp_bps}bps SL={cfg.sl_bps}bps TIME={cfg.max_hold_minutes}min TREND_FLIP EMERGENCY_SL={cfg.emergency_sl_bps}bps")
+    if cfg.use_atr_exits:
+        logger.info(
+            f"  Exit: ATR-adaptive TP=max({cfg.tp_bps_floor:.0f}bps, {cfg.tp_atr_mult}×ATR) "
+            f"SL=max({cfg.sl_bps_floor:.0f}bps, {cfg.sl_atr_mult}×ATR) "
+            f"TIME={cfg.max_hold_minutes}min TREND_FLIP EMERGENCY_SL={cfg.emergency_sl_bps}bps"
+        )
+    else:
+        logger.info(f"  Exit: TP={cfg.tp_bps}bps SL={cfg.sl_bps}bps TIME={cfg.max_hold_minutes}min TREND_FLIP EMERGENCY_SL={cfg.emergency_sl_bps}bps")
     logger.info(f"  Size: {cfg.size_pct}% of buying power ({cfg.leverage}x leverage, min notional: ${cfg.min_notional})")
     logger.info(f"  Volume gate: {'ON' if cfg.require_volume else 'OFF'}")
     logger.info(f"  Self-learning: ACTIVE (circuit breaker + score bucket)")
