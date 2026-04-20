@@ -201,64 +201,64 @@ class HibachiAdapter(ExchangeAdapter):
         return await self.sdk.get_price(symbol)
 
     async def close_position(self, symbol: str) -> bool:
+        """Maker-only close on Hibachi. Tries progressively wider limits;
+        gives up and returns False if none fill. Bot retries next cycle.
+
+        NEVER falls through to market order. User directive 2026-04-20:
+        taker fees bleed the account; accept longer time-to-exit instead.
+        """
         pos = await self.get_position(symbol)
         if not pos:
             return True
 
         is_buy = pos["side"] == "SHORT"
-
-        # ── Step 1: Try limit close at competitive price (maker, 0% fee) ──
-        try:
-            price = await self.sdk.get_price(symbol)
-            if price:
-                # Place limit slightly inside the spread to attract fills
-                # Buy: just below current price, Sell: just above
-                if is_buy:
-                    limit_price = round(price * 0.9998, 4)  # 0.02% below
-                else:
-                    limit_price = round(price * 1.0002, 4)  # 0.02% above
-
-                logger.info(
-                    f"[hibachi] Trying limit close: {'BUY' if is_buy else 'SELL'} "
-                    f"{symbol} @ ${limit_price:.4f} (mark={price:.4f})"
-                )
-
-                result = await self.sdk.create_limit_order(
-                    symbol=symbol,
-                    is_buy=is_buy,
-                    amount=pos["size"],
-                    price=limit_price,
-                )
-
-                if result and "error" not in result:
-                    # Wait for fill (check every 2s, up to 12s)
-                    for _ in range(6):
-                        await asyncio.sleep(2)
-                        check = await self.get_position(symbol)
-                        if not check:
-                            logger.info(f"[hibachi] Limit close FILLED for {symbol}")
-                            return True
-
-                    # Not filled — cancel limit order
-                    logger.info(f"[hibachi] Limit close not filled for {symbol}, falling back to market")
-                    await self.sdk.cancel_all_orders(symbol)
-                    await asyncio.sleep(1)
-        except Exception as e:
-            logger.warning(f"[hibachi] Limit close attempt failed: {e}")
-
-        # ── Step 2: Fallback to market order (taker) ──
-        pos = await self.get_position(symbol)
-        if not pos:
-            return True
-        result = await self.sdk.create_market_order(
-            symbol=symbol,
-            is_buy=is_buy,
-            amount=pos["size"],
-        )
-        if not result or "error" in result:
+        price = await self.sdk.get_price(symbol)
+        if not price:
+            logger.warning(f"[hibachi] No mark price for {symbol}, skip close cycle")
             return False
-        await asyncio.sleep(1)
-        return await self.get_position(symbol) is None
+
+        # Widening ladder: 2bps → 5bps → 10bps → 20bps. Total wait ≤ ~40s.
+        for offset_bps in (2, 5, 10, 20):
+            # BUY close: place BELOW mid to be a maker
+            # SELL close: place ABOVE mid to be a maker
+            mult = (1 - offset_bps / 10_000) if is_buy else (1 + offset_bps / 10_000)
+            limit_price = round(price * mult, 4)
+
+            logger.info(
+                f"[hibachi] Maker close try ({offset_bps}bps): "
+                f"{'BUY' if is_buy else 'SELL'} {symbol} @ ${limit_price:.4f} (mark=${price:.4f})"
+            )
+
+            try:
+                result = await self.sdk.create_limit_order(
+                    symbol=symbol, is_buy=is_buy,
+                    amount=pos["size"], price=limit_price,
+                )
+            except Exception as e:
+                logger.warning(f"[hibachi] Limit placement raised: {e}")
+                continue
+            if not result or "error" in result:
+                continue
+
+            # Wait for fill (6s per try = 10 x 600ms)
+            for _ in range(6):
+                await asyncio.sleep(1)
+                check = await self.get_position(symbol)
+                if not check:
+                    logger.info(f"[hibachi] Maker close FILLED for {symbol} @ {offset_bps}bps")
+                    return True
+                pos = check  # in case size changed
+
+            # Not filled at this offset — cancel and widen
+            try:
+                await self.sdk.cancel_all_orders(symbol)
+            except Exception:
+                pass
+            await asyncio.sleep(0.5)
+            price = await self.sdk.get_price(symbol) or price
+
+        logger.info(f"[hibachi] Maker close gave up after 4 widenings — will retry next cycle")
+        return False
 
     async def get_all_positions(self) -> List[dict]:
         positions = await self.sdk.get_positions()
@@ -491,14 +491,55 @@ class NadoAdapter(ExchangeAdapter):
         except Exception as e:
             logger.warning(f"[nado] Maker close attempt failed: {e}")
 
-        # ── Step 2: Fallback to market order (taker) ──
-        result = await self.sdk.create_market_order(
-            symbol=symbol,
-            is_buy=is_buy,
-            amount=pos["size"],
-            reduce_only=True,
-        )
-        return bool(result and result.get("status") == "success")
+        # Maker-only policy (user directive 2026-04-20): no market fallback.
+        # Widen the POST_ONLY a few times, then give up and retry next cycle.
+        for extra_bps in (5, 15, 30):
+            try:
+                product = await self.sdk.get_product_by_symbol(symbol)
+                if not product:
+                    break
+                oracle_price = product.get("oracle_price", 0) or 0
+                price_inc = product.get("price_increment", 1.0) or 1.0
+                if not oracle_price or not price_inc:
+                    break
+
+                mult = (1 - extra_bps / 10_000) if is_buy else (1 + extra_bps / 10_000)
+                wider_price = oracle_price * mult
+                if is_buy:
+                    wider_price = round(math.floor(wider_price / price_inc) * price_inc, 10)
+                else:
+                    wider_price = round(math.ceil(wider_price / price_inc) * price_inc, 10)
+
+                logger.info(
+                    f"[nado] Maker close wider try ({extra_bps}bps): "
+                    f"{'BUY' if is_buy else 'SELL'} {symbol} @ ${wider_price:.4f} "
+                    f"(oracle=${oracle_price:.4f})"
+                )
+
+                pos = await self.get_position(symbol)
+                if not pos:
+                    return True
+                size = round(math.floor(pos["size"] / (product.get("size_increment", 0.00005) or 0.00005))
+                             * (product.get("size_increment", 0.00005) or 0.00005), 10)
+
+                result = await self.sdk.create_limit_order(
+                    symbol=symbol, is_buy=is_buy, amount=size,
+                    price=wider_price, order_type="POST_ONLY",
+                )
+                if result and result.get("status") == "success":
+                    for _ in range(6):
+                        await asyncio.sleep(1)
+                        check = await self.get_position(symbol)
+                        if not check or check.get("size", 0) == 0:
+                            logger.info(f"[nado] Maker close FILLED wider @ {extra_bps}bps")
+                            return True
+                    await self.cancel_all(symbol)
+                    await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"[nado] Wider maker close attempt failed: {e}")
+
+        logger.info(f"[nado] Maker close gave up — will retry next cycle")
+        return False
 
     async def get_all_positions(self) -> List[dict]:
         positions = await self.sdk.get_positions()
