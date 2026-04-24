@@ -100,6 +100,12 @@ Tests: 55/55 pass. Run `python3 -m pytest tests/reconciliation/ -v`.
 5. **Paradex momentum adapter** — put Paradex on momentum strategy, POST_ONLY only.
 6. **Hibachi POST_ONLY/ALO SDK extension** — deferred, low urgency.
 
+## Backlog — data sources / integrations parked for now
+
+See `docs/BACKLOG.md` for full notes. Summary:
+
+- **Massive.com data API** (evaluated 2026-04-21) — API key in `.env` as `MASSIVE_API_KEY`. Spot-CEX-only provider; missing the perp signals we actually need (funding, OI, liquidations, L2). Possible future uses: basis-divergence signal between aggregated CEX spot FMV and our perp price; cross-venue volume attribution; MCP integration for ad-hoc research queries. **Better alternatives for perp-specific gaps**: Coinglass (funding/OI/liquidations, free tier), Binance/Bybit direct REST.
+
 ## Oct 2025 Lighter Hack — Reference
 
 Documented incident, private key exposed in chat during Lighter SDK setup, $433.76 drained from `0xCe9784FcDaA99c64Eb88ef35b8F4A5EabDC129d7`. Full audit: `docs/SECURITY_AUDIT_REPORT.md`. Recovered prompt history: `docs/OCT2025_CHAT_HISTORY_RECOVERED.md`.

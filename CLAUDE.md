@@ -3,10 +3,11 @@
 Live crypto trading bots across Paradex, Nado, Hibachi. As of 2026-04-17 on the reconciliation-first PnL architecture.
 
 ## Read first
-- `PROGRESS.md` — current bot status, balances, baselines, what's running
+- `PROGRESS.md` — current bot status + "Tracking Baselines" section (reconciler baselines from 2026-04-17)
+- `docs/PROGRESS_ARCHIVE.md` — older baselines (Apr 13 post-machine-reboot starting balances: Paradex $27.65, Nado $54.91, Hibachi $28.97, Extended $0.54 = $112.07 total). Pre-reconciler dollar figures in this file are fiction — use only the balance snapshots, not the bot-reported PnL.
+- `docs/BACKLOG.md` — deferred ideas + data sources
 - `docs/RECONCILIATION_PLAN.md` — architecture background
 - `docs/CLEANUP_AFTER_CONFIRMATION.md` — what gets ripped out AFTER 48h soak confirms reconciler accuracy
-- History before 2026-04-17: `docs/PROGRESS_ARCHIVE.md` (legacy PnL was fiction — do not use old numbers as baselines)
 
 ## Hard rules (do not violate)
 

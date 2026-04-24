@@ -322,6 +322,12 @@ class NadoAdapter(ExchangeAdapter):
             )
 
         self.sdk = NadoSDK(wallet, signer_key, subaccount)
+        # Safety valve: if maker-only close keeps failing on a symbol for
+        # >STUCK_GRACE_MIN, allow ONE market close to unstick. Prevents the
+        # pattern where a position rides far past SL because the book is too
+        # thin to find a maker. Reset on successful close.
+        self._stuck_first_attempt_ts: Dict[str, float] = {}
+        self.STUCK_GRACE_MIN = 15.0
 
     @property
     def name(self) -> str:
@@ -438,10 +444,18 @@ class NadoAdapter(ExchangeAdapter):
         return None
 
     async def close_position(self, symbol: str) -> bool:
+        import time as _time
         pos = await self.get_position(symbol)
         if not pos:
+            self._stuck_first_attempt_ts.pop(symbol, None)
             return True
         is_buy = pos["side"] == "SHORT"
+
+        # Safety valve: record when this close started retrying.
+        now = _time.time()
+        if symbol not in self._stuck_first_attempt_ts:
+            self._stuck_first_attempt_ts[symbol] = now
+        stuck_minutes = (now - self._stuck_first_attempt_ts[symbol]) / 60.0
 
         # ── Step 1: Try POST_ONLY maker close (0% fee) ──
         try:
@@ -538,7 +552,28 @@ class NadoAdapter(ExchangeAdapter):
             except Exception as e:
                 logger.warning(f"[nado] Wider maker close attempt failed: {e}")
 
-        logger.info(f"[nado] Maker close gave up — will retry next cycle")
+        # Safety valve: if we've been retrying maker-only for >STUCK_GRACE_MIN
+        # minutes on the same position, allow one market order to unstick it.
+        # Prevents positions riding deep past SL when book is too thin for makers.
+        if stuck_minutes > self.STUCK_GRACE_MIN:
+            logger.warning(
+                f"[nado] STUCK SAFETY VALVE: maker-only failed for {stuck_minutes:.1f}min "
+                f"on {symbol}. Allowing one market close."
+            )
+            try:
+                pos_now = await self.get_position(symbol)
+                if pos_now and pos_now.get("size", 0) > 0:
+                    result = await self.sdk.create_market_order(
+                        symbol=symbol, is_buy=is_buy,
+                        amount=pos_now["size"], reduce_only=True,
+                    )
+                    if result and result.get("status") == "success":
+                        self._stuck_first_attempt_ts.pop(symbol, None)
+                        return True
+            except Exception as e:
+                logger.warning(f"[nado] Safety-valve market close failed: {e}")
+
+        logger.info(f"[nado] Maker close gave up — will retry next cycle (stuck {stuck_minutes:.1f}min)")
         return False
 
     async def get_all_positions(self) -> List[dict]:

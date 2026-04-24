@@ -95,8 +95,13 @@ class ParadexGPTBot:
         # Position tracking
         self.positions: Dict[str, Dict] = {}
 
-        # Symbols to trade (tight spreads on Paradex)
-        self.symbols = ['BTC', 'ETH', 'SOL']
+        # Symbols to trade — majors with Binance kline data for technicals.
+        # Expanded 2026-04-24 per user directive: analyze every liquid market
+        # the exchange offers, not just BTC.
+        self.symbols = [
+            'BTC', 'ETH', 'SOL', 'AAVE', 'AVAX', 'UNI', 'LINK',
+            'DOGE', 'XRP', 'SUI', 'LTC', 'BNB', 'ADA', 'NEAR',
+        ]
 
     def get_binance_technicals(self, symbol: str) -> Dict:
         """Fetch technicals from Binance for a symbol"""

@@ -281,15 +281,15 @@ class MomentumBot:
             config.tp_bps = 80.0         # fallback if ATR missing
             config.sl_bps = 40.0
         elif exchange == "nado":
-            # SLOW preset (2026-04-20). Sweep showed fast=0/7 profitable,
-            # slow=4/7. Restricted universe AAVE/AVAX/ETH — launch with
-            # --assets AAVE,AVAX,ETH to enforce.
+            # SLOW preset + FULL UNIVERSE (2026-04-24). User directive:
+            # analyze every market the exchange offers, pick best entries.
+            # No artificial symbol restriction.
             config.min_notional = 100.0
             config.leverage = 10.0
-            config.max_positions = 2
-            config.size_pct = 10.0         # ↓ from 20 — slow preset
-            config.max_hold_minutes = 480.0  # ↑ from 120 — let winners run
-            config.score_min = 3.5           # ↑ from 2.5 — high conviction only
+            config.max_positions = 5          # ↑ from 2 — let scanner pick best 5
+            config.size_pct = 6.0             # ↓ from 10 — 5 × 6% = 30% max capital in play
+            config.max_hold_minutes = 480.0
+            config.score_min = 3.5            # still high-conviction
             config.require_volume = False
             config.offset_bps = 5.0
             config.use_atr_exits = True
