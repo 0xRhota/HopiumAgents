@@ -965,6 +965,294 @@ class ExtendedAdapter(ExchangeAdapter):
             return []
 
 
+# ─── Paradex ──────────────────────────────────────────────────────
+
+class ParadexAdapter(ExchangeAdapter):
+    """Wraps ParadexSubkey from paradex_py.
+
+    Paradex pays MAKER REBATES (-0.5 bps) and charges 2 bps taker.
+    Always prefer POST_ONLY. Maker-close pattern mirrors Nado's wider-limit
+    safety valve.
+
+    Python 3.11+ required (paradex_py SDK incompatible with 3.9).
+
+    Symbol format on Paradex: f"{asset}-USD-PERP" (e.g. "BTC-USD-PERP").
+    """
+
+    STUCK_GRACE_MIN = 15.0
+    _PRICE_CACHE_TTL = 2.0
+
+    def __init__(self):
+        from paradex_py import ParadexSubkey
+        l2_address = os.getenv("PARADEX_ACCOUNT_ADDRESS")
+        l2_private_key = os.getenv("PARADEX_PRIVATE_SUBKEY")
+        if not all([l2_address, l2_private_key]):
+            raise ValueError(
+                "Missing Paradex credentials. Set in .env: "
+                "PARADEX_ACCOUNT_ADDRESS, PARADEX_PRIVATE_SUBKEY"
+            )
+        self.client = ParadexSubkey(
+            env="prod",
+            l2_address=l2_address,
+            l2_private_key=l2_private_key,
+        )
+        self._stuck_first_attempt_ts: Dict[str, float] = {}
+        self._market_meta_cache: Dict[str, dict] = {}
+        self._price_cache: Dict[str, tuple] = {}  # symbol -> (price, ts)
+
+    @property
+    def name(self) -> str:
+        return "paradex"
+
+    @property
+    def supports_post_only(self) -> bool:
+        return True
+
+    def _market_for(self, asset: str) -> str:
+        if asset.endswith("-USD-PERP"):
+            return asset
+        return f"{asset}-USD-PERP"
+
+    async def get_equity(self) -> float:
+        try:
+            summary = self.client.api_client.fetch_account_summary()
+            v = getattr(summary, "account_value", None)
+            return float(v) if v is not None else 0.0
+        except Exception as e:
+            logger.error(f"[paradex] get_equity error: {e}")
+            return 0.0
+
+    async def get_position(self, symbol: str) -> Optional[dict]:
+        market = self._market_for(symbol)
+        try:
+            resp = self.client.api_client.fetch_positions()
+            for p in (resp.get("results") if isinstance(resp, dict) else []) or []:
+                if p.get("market") != market:
+                    continue
+                if p.get("status") != "OPEN":
+                    continue
+                size = float(p.get("size", 0) or 0)
+                if size == 0:
+                    continue
+                side = "LONG" if size > 0 else "SHORT"
+                return {
+                    "symbol": symbol,
+                    "side": side,
+                    "size": abs(size),
+                    "entry_price": float(p.get("average_entry_price", 0) or 0),
+                    "unrealized_pnl": float(p.get("unrealized_pnl", 0) or 0),
+                }
+        except Exception as e:
+            logger.error(f"[paradex] get_position {symbol}: {e}")
+        return None
+
+    async def get_all_positions(self) -> List[dict]:
+        try:
+            resp = self.client.api_client.fetch_positions()
+            out = []
+            for p in (resp.get("results") if isinstance(resp, dict) else []) or []:
+                if p.get("status") != "OPEN":
+                    continue
+                size = float(p.get("size", 0) or 0)
+                if size == 0:
+                    continue
+                market = p.get("market", "")
+                asset = market.replace("-USD-PERP", "")
+                side = "LONG" if size > 0 else "SHORT"
+                entry = float(p.get("average_entry_price", 0) or 0)
+                out.append({
+                    "symbol": asset,
+                    "side": side,
+                    "size": abs(size),
+                    "entry_price": entry,
+                    "notional": abs(size) * entry,
+                    "unrealized_pnl": float(p.get("unrealized_pnl", 0) or 0),
+                })
+            return out
+        except Exception as e:
+            logger.error(f"[paradex] get_all_positions: {e}")
+            return []
+
+    async def get_price(self, symbol: str) -> Optional[float]:
+        market = self._market_for(symbol)
+        cached = self._price_cache.get(market)
+        if cached and (time.time() - cached[1]) < self._PRICE_CACHE_TTL:
+            return cached[0]
+        try:
+            bbo = self.client.api_client.fetch_bbo(market)
+            if not bbo:
+                return None
+            bid = float(bbo.get("bid", 0) or 0)
+            ask = float(bbo.get("ask", 0) or 0)
+            if bid <= 0 or ask <= 0:
+                return None
+            mid = (bid + ask) / 2
+            self._price_cache[market] = (mid, time.time())
+            return mid
+        except Exception as e:
+            logger.error(f"[paradex] get_price {symbol}: {e}")
+            return None
+
+    def _market_meta(self, market: str) -> dict:
+        if market in self._market_meta_cache:
+            return self._market_meta_cache[market]
+        try:
+            resp = self.client.api_client.fetch_markets()
+            for m in (resp.get("results") if isinstance(resp, dict) else []) or []:
+                if m.get("symbol") == market:
+                    meta = {
+                        "tick_size": float(m.get("price_tick_size", 0.01) or 0.01),
+                        "size_increment": float(m.get("order_size_increment", 0.001) or 0.001),
+                        "min_notional": float(m.get("min_notional", 1.0) or 1.0),
+                    }
+                    self._market_meta_cache[market] = meta
+                    return meta
+        except Exception:
+            pass
+        return {"tick_size": 0.01, "size_increment": 0.001, "min_notional": 1.0}
+
+    async def place_limit(self, symbol: str, side: str, price: float, size: float) -> Optional[str]:
+        from paradex_py.common.order import Order, OrderType, OrderSide
+        market = self._market_for(symbol)
+        meta = self._market_meta(market)
+        # Round price to tick, size to increment
+        tick = meta["tick_size"]
+        size_inc = meta["size_increment"]
+        rounded_price = round(round(price / tick) * tick, 10)
+        rounded_size = round(math.floor(size / size_inc) * size_inc, 10)
+        if rounded_size <= 0:
+            logger.warning(f"[paradex] size {size} rounds to 0 (inc={size_inc})")
+            return None
+        try:
+            order = Order(
+                market=market,
+                order_type=OrderType.Limit,
+                order_side=OrderSide.Buy if side.upper() == "BUY" else OrderSide.Sell,
+                size=Decimal(str(rounded_size)),
+                limit_price=Decimal(str(rounded_price)),
+                instruction="POST_ONLY",
+            )
+            result = self.client.api_client.submit_order(order)
+            if result and isinstance(result, dict):
+                oid = result.get("id") or result.get("order_id")
+                if oid:
+                    return str(oid)
+            logger.warning(f"[paradex] limit order returned no id: {result}")
+            return None
+        except Exception as e:
+            logger.warning(f"[paradex] place_limit {symbol} failed: {e}")
+            return None
+
+    async def cancel_all(self, symbol: str) -> int:
+        market = self._market_for(symbol)
+        try:
+            self.client.api_client.cancel_orders(market=market)
+            return 1
+        except Exception as e:
+            logger.warning(f"[paradex] cancel_all {symbol}: {e}")
+            return 0
+
+    async def get_open_orders(self, symbol: str) -> List[dict]:
+        market = self._market_for(symbol)
+        try:
+            resp = self.client.api_client.fetch_orders()
+            return [o for o in (resp.get("results") if isinstance(resp, dict) else []) or []
+                    if o.get("market") == market and o.get("status") == "OPEN"]
+        except Exception:
+            return []
+
+    async def close_position(self, symbol: str) -> bool:
+        """Maker-only close with widening + safety valve (mirrors Nado pattern)."""
+        pos = await self.get_position(symbol)
+        if not pos:
+            self._stuck_first_attempt_ts.pop(symbol, None)
+            return True
+
+        now = time.time()
+        if symbol not in self._stuck_first_attempt_ts:
+            self._stuck_first_attempt_ts[symbol] = now
+        stuck_minutes = (now - self._stuck_first_attempt_ts[symbol]) / 60.0
+
+        is_buy_to_close = pos["side"] == "SHORT"
+        side = "BUY" if is_buy_to_close else "SELL"
+        for offset_bps in (1, 5, 15, 30):
+            price = await self.get_price(symbol)
+            if not price:
+                break
+            mult = (1 - offset_bps / 10_000) if is_buy_to_close else (1 + offset_bps / 10_000)
+            limit_price = price * mult
+            logger.info(
+                f"[paradex] Maker close try ({offset_bps}bps): {side} {symbol} "
+                f"@ ${limit_price:.4f} (mid=${price:.4f})"
+            )
+            oid = await self.place_limit(symbol, side, limit_price, pos["size"])
+            if not oid:
+                continue
+            for _ in range(6):
+                await asyncio.sleep(1)
+                check = await self.get_position(symbol)
+                if not check:
+                    logger.info(f"[paradex] Maker close FILLED for {symbol} @ {offset_bps}bps")
+                    self._stuck_first_attempt_ts.pop(symbol, None)
+                    return True
+                pos = check
+            await self.cancel_all(symbol)
+            await asyncio.sleep(0.5)
+
+        # Safety valve — see NadoAdapter
+        if stuck_minutes > self.STUCK_GRACE_MIN:
+            logger.warning(
+                f"[paradex] STUCK SAFETY VALVE: maker-only failed for "
+                f"{stuck_minutes:.1f}min on {symbol}. Allowing one market close."
+            )
+            try:
+                from paradex_py.common.order import Order, OrderType, OrderSide
+                pos_now = await self.get_position(symbol)
+                if pos_now and pos_now.get("size", 0) > 0:
+                    market = self._market_for(symbol)
+                    meta = self._market_meta(market)
+                    rounded_size = round(
+                        math.floor(pos_now["size"] / meta["size_increment"]) * meta["size_increment"],
+                        10,
+                    )
+                    order = Order(
+                        market=market,
+                        order_type=OrderType.Market,
+                        order_side=OrderSide.Buy if is_buy_to_close else OrderSide.Sell,
+                        size=Decimal(str(rounded_size)),
+                    )
+                    result = self.client.api_client.submit_order(order)
+                    if result:
+                        self._stuck_first_attempt_ts.pop(symbol, None)
+                        return True
+            except Exception as e:
+                logger.warning(f"[paradex] Safety-valve market close failed: {e}")
+
+        logger.info(f"[paradex] Maker close gave up — will retry next cycle (stuck {stuck_minutes:.1f}min)")
+        return False
+
+    async def discover_markets(self) -> List[dict]:
+        try:
+            resp = self.client.api_client.fetch_markets()
+            results = []
+            for m in (resp.get("results") if isinstance(resp, dict) else []) or []:
+                sym = m.get("symbol", "")
+                if not sym.endswith("-USD-PERP"):
+                    continue
+                asset = sym.replace("-USD-PERP", "")
+                results.append({
+                    "asset": asset,
+                    "symbol": sym,
+                    "min_notional": float(m.get("min_notional", 1.0) or 1.0),
+                })
+            return results
+        except Exception as e:
+            logger.error(f"[paradex] discover_markets: {e}")
+            return []
+
+
+# ─── Factory ──────────────────────────────────────────────────────
+
 def create_adapter(exchange: str) -> ExchangeAdapter:
     """Factory function to create the right adapter."""
     exchange = exchange.lower()
@@ -974,5 +1262,7 @@ def create_adapter(exchange: str) -> ExchangeAdapter:
         return NadoAdapter()
     elif exchange == "extended":
         return ExtendedAdapter()
+    elif exchange == "paradex":
+        return ParadexAdapter()
     else:
-        raise ValueError(f"Unknown exchange: {exchange}. Use: hibachi, nado, extended")
+        raise ValueError(f"Unknown exchange: {exchange}. Use: hibachi, nado, extended, paradex")

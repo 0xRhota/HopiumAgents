@@ -281,15 +281,19 @@ class MomentumBot:
             config.tp_bps = 80.0         # fallback if ATR missing
             config.sl_bps = 40.0
         elif exchange == "nado":
-            # SLOW preset + FULL UNIVERSE (2026-04-24). User directive:
-            # analyze every market the exchange offers, pick best entries.
-            # No artificial symbol restriction.
+            # SLOW preset + FULL UNIVERSE (2026-04-24, refined 2026-04-27).
+            # max_positions reduced 5 → 2 because Nado's $100 min_notional floor
+            # overrides size_pct, forcing every position to be $100 regardless
+            # of the configured percent. With $25-35 account at 10x = $250-350
+            # buying power, 5 × $100 = $500 deployed = exceeds buying power and
+            # caused stuck/over-leveraged positions. 2 × $100 = $200 ≈ 60-80%
+            # of buying power, which is the headroom we want.
             config.min_notional = 100.0
             config.leverage = 10.0
-            config.max_positions = 5          # ↑ from 2 — let scanner pick best 5
-            config.size_pct = 6.0             # ↓ from 10 — 5 × 6% = 30% max capital in play
+            config.max_positions = 2          # ↓ from 5 — fits buying power on small account
+            config.size_pct = 6.0             # mostly inert because of min_notional floor
             config.max_hold_minutes = 480.0
-            config.score_min = 3.5            # still high-conviction
+            config.score_min = 3.5
             config.require_volume = False
             config.offset_bps = 5.0
             config.use_atr_exits = True
@@ -301,6 +305,25 @@ class MomentumBot:
             config.sl_bps = 200.0
         elif exchange == "extended":
             config.leverage = 10.0       # Extended 10x leverage
+        elif exchange == "paradex":
+            # Paradex: 0% maker rebates, 0.02% taker, $1 min notional.
+            # Slow preset (matches Nado strategic intent) but smaller positions
+            # because Paradex account is tiny ($28). Lower max_positions to 2.
+            config.min_notional = 1.0
+            config.leverage = 1.0          # Paradex margin: positions sized in $; we use raw equity not buying-power
+            config.max_positions = 2
+            config.size_pct = 30.0         # 30% per position × 2 = 60% deployed (no leverage)
+            config.max_hold_minutes = 480.0
+            config.score_min = 3.5         # high-conviction same as Nado slow
+            config.require_volume = False
+            config.offset_bps = 1.0        # very tight offset; Paradex pays for maker
+            config.use_atr_exits = True
+            config.tp_atr_mult = 3.0
+            config.sl_atr_mult = 1.5
+            config.tp_bps_floor = 150.0
+            config.sl_bps_floor = 75.0
+            config.tp_bps = 300.0
+            config.sl_bps = 200.0
 
         self.engine = MomentumEngine(config)
 
@@ -941,7 +964,7 @@ def _register_static(exchange: str):
 
 def main():
     parser = argparse.ArgumentParser(description="Momentum Limit Order Bot")
-    parser.add_argument("--exchange", required=True, choices=["hibachi", "nado", "extended"])
+    parser.add_argument("--exchange", required=True, choices=["hibachi", "nado", "extended", "paradex"])
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--asset", help="Single asset (BTC, ETH, SOL)")
     group.add_argument("--assets", help="Comma-separated assets or 'all' for auto-discovery")
