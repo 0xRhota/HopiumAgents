@@ -28,6 +28,9 @@ from paper_sim.strategies.account_a_tight_slow import AccountATightSlow, Account
 from paper_sim.strategies.account_b_funding_arb import AccountBFundingArb, AccountBConfig
 from paper_sim.strategies.account_c_llm_scout import AccountCLLMScout, AccountCConfig
 from paper_sim.strategies.account_d_hl_maker import AccountDHLMaker, AccountDConfig
+from paper_sim.strategies.account_e_eth_btc_pair import (
+    AccountEEthBtcPair, AccountEConfig,
+)
 from paper_sim.venues.paradex import ParadexVenue
 from paper_sim.venues.hyperliquid import HyperliquidVenue
 
@@ -85,6 +88,8 @@ def _build_strategy(account: str):
         return s
     if account == "D":
         return AccountDHLMaker(AccountDConfig())
+    if account == "E":
+        return AccountEEthBtcPair(AccountEConfig())
     raise ValueError(f"unknown account: {account}")
 
 
@@ -187,7 +192,7 @@ def main(argv=None):
 
     p_run = sub.add_parser("run", help="run a paper account")
     p_run.add_argument("--account", required=True,
-                       choices=["A", "B", "C1", "C2", "C3", "D"])
+                       choices=["A", "B", "C1", "C2", "C3", "D", "E"])
     p_run.add_argument("--starting-equity", type=float, default=5000.0)
 
     p_report = sub.add_parser("report", help="show paper-account PnL")

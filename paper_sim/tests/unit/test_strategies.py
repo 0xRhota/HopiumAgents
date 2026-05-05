@@ -161,7 +161,9 @@ class TestAccountC:
     def test_consensus_produces_order(self):
         a = lambda b: [LLMTradeIdea("BTC-USD-PERP", "LONG", 8, "ta", 24)]
         b = lambda b: [LLMTradeIdea("BTC-USD-PERP", "LONG", 6, "tb", 24)]
-        c = AccountCLLMScout([a, b])
+        # Cold-start gate disabled so test doesn't need 10 fundings
+        c = AccountCLLMScout([a, b],
+                             AccountCConfig(min_funding_symbols_before_first_cycle=0))
 
         # ts must exceed cadence (4h default) so initial briefing fires
         ms = MarketState(ts=20_000.0)

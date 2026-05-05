@@ -54,6 +54,9 @@ class AccountCConfig:
     max_trades_per_week: int = 10
     max_size_pct: float = 0.25         # at conviction=10
     offset_bps: float = 1.0
+    # Don't waste LLM calls on cold-start briefings. Wait until at least this
+    # many symbols have funding data populated before issuing the first cycle.
+    min_funding_symbols_before_first_cycle: int = 10
 
 
 @dataclass
@@ -105,6 +108,15 @@ class AccountCLLMScout(Strategy):
         # Min spacing between entries
         if market.ts - self.state.last_entry_ts < self.config.min_seconds_between_entries:
             return []
+        # Cold-start gate: wait until funding feed has populated for enough
+        # symbols. Without it, briefings are empty and LLMs correctly say [].
+        funding_count = sum(
+            1 for (v, s) in market.funding.keys()
+            if v == self.config.venue and s in self.config.universe
+        )
+        if (self.state.last_briefing_ts == 0.0 and
+                funding_count < self.config.min_funding_symbols_before_first_cycle):
+            return []
 
         briefing = self._build_briefing(market, portfolio)
         self.state.last_briefing_ts = market.ts
@@ -154,8 +166,23 @@ class AccountCLLMScout(Strategy):
                 "spread_bps": book.spread_bps,
             })
 
-        # Compute BTC 4h regime from candles if available
-        btc_closes = market.candles.get((self.config.venue, "BTC-USD-PERP", "1h_close"), [])
+        # Compute 24h price changes per symbol from 1h candle history.
+        # Useful as "top movers" context for the LLM.
+        movers = []
+        for sym in self.config.universe:
+            closes = market.candles.get(
+                (self.config.venue, sym, "1h_close"), [])
+            if len(closes) < 24:
+                continue
+            change_pct = (closes[-1] - closes[-24]) / closes[-24] * 100.0 \
+                if closes[-24] > 0 else 0.0
+            movers.append({"symbol": sym, "change_24h_pct": round(change_pct, 2)})
+        movers.sort(key=lambda m: -abs(m["change_24h_pct"]))
+        top_movers = movers[:5]
+
+        # BTC regime from 1h candles
+        btc_closes = market.candles.get(
+            (self.config.venue, "BTC-USD-PERP", "1h_close"), [])
         btc_regime = "UNKNOWN"
         if len(btc_closes) >= 20:
             recent = sum(btc_closes[-4:]) / 4
@@ -167,6 +194,22 @@ class AccountCLLMScout(Strategy):
             else:
                 btc_regime = "CHOP"
 
+        # Cross-venue funding spread (if HL funding tracked too)
+        cross_venue_funding_spread = []
+        for paradex_sym, hl_sym in [
+            ("BTC-USD-PERP", "BTC"), ("ETH-USD-PERP", "ETH"),
+            ("SOL-USD-PERP", "SOL"),
+        ]:
+            f_par = market.funding.get((self.config.venue, paradex_sym))
+            f_hl = market.funding.get(("hyperliquid", hl_sym))
+            if f_par is not None and f_hl is not None:
+                cross_venue_funding_spread.append({
+                    "symbol": hl_sym,
+                    "paradex_bps_per_8h": f_par.rate_bps_per_8h,
+                    "hyperliquid_bps_per_8h": f_hl.rate_bps_per_8h,
+                    "spread_bps": f_par.rate_bps_per_8h - f_hl.rate_bps_per_8h,
+                })
+
         return {
             "ts": market.ts,
             "btc_regime": btc_regime,
@@ -177,8 +220,15 @@ class AccountCLLMScout(Strategy):
             ],
             "equity": portfolio.equity,
             "funding_per_symbol": funding_summary,
+            "top_movers_24h": top_movers,
+            "cross_venue_funding_spread": cross_venue_funding_spread,
             "max_trades_remaining_this_week": (
                 self.config.max_trades_per_week - self.state.trades_this_week),
+            # Hooks for future data sources — currently empty. When wired
+            # (Coinglass for liquidations, on-chain whale tracker for HL),
+            # these will appear in briefings.
+            "whale_flows": [],
+            "recent_large_liquidations": [],
         }
 
     def _ideas_to_orders(

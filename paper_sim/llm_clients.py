@@ -135,8 +135,15 @@ def call_with_meta(model: str, briefing: dict) -> dict:
     if raw is None:
         return {"model": model, "raw": None, "parsed": [], "error": "no_response"}
     parsed = _parse_ideas(raw)
-    return {"model": model, "raw": raw, "parsed": parsed,
-            "error": None if parsed or not raw.strip() else "parse_returned_empty"}
+    # `[]` (empty array) is a legitimate "no trades this cycle" decision.
+    # Only flag as parse failure if raw has substance but yielded nothing
+    # AND the raw text doesn't look like an empty-array literal.
+    cleaned = raw.strip().lstrip("`").rstrip("`").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+    is_empty_array_decision = cleaned == "[]"
+    error = None if parsed or is_empty_array_decision or not raw.strip() else "parse_returned_empty"
+    return {"model": model, "raw": raw, "parsed": parsed, "error": error}
 
 
 def make_client(model: str):

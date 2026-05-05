@@ -145,16 +145,20 @@ class ParadexVenue(VenueClient):
                 ))
 
     async def _poll_funding_loop(self, symbols: List[str]) -> None:
+        logger.info(f"[paradex_funding] loop start; {len(symbols)} symbols")
         while not self._closed:
             try:
-                await self._poll_funding(symbols)
+                count = await self._poll_funding(symbols)
+                logger.info(f"[paradex_funding] polled OK; {count}/{len(symbols)} symbols got funding")
             except Exception as e:
-                logger.warning(f"[paradex_funding] poll error: {e}")
+                logger.warning(f"[paradex_funding] poll error: {e!r}")
             await asyncio.sleep(60.0)
 
-    async def _poll_funding(self, symbols: List[str]) -> None:
+    async def _poll_funding(self, symbols: List[str]) -> int:
         if self._session is None:
-            return
+            logger.warning("[paradex_funding] _session is None; cannot poll")
+            return 0
+        ok = 0
         for sym in symbols:
             try:
                 async with self._session.get(
@@ -163,6 +167,8 @@ class ParadexVenue(VenueClient):
                     timeout=10,
                 ) as resp:
                     if resp.status != 200:
+                        if resp.status in (429, 503):
+                            logger.warning(f"[paradex_funding] {sym} got {resp.status}")
                         continue
                     data = await resp.json()
                     results = data.get("results", []) if isinstance(data, dict) else []
@@ -176,5 +182,10 @@ class ParadexVenue(VenueClient):
                         ts=time.time(), venue=self.venue, symbol=sym,
                         rate_bps_per_8h=bps,
                     ))
+                    ok += 1
             except asyncio.TimeoutError:
                 continue
+            except Exception as e:
+                logger.warning(f"[paradex_funding] {sym} fail: {e!r}")
+                continue
+        return ok
