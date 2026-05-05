@@ -1,0 +1,5 @@
+{"kind": "book_snapshot", "ts": 1.0, "symbol": "BTC", "bids": [[100.0, 1.0], [99.0, 2.0]], "asks": [[101.0, 1.0], [102.0, 2.0]]}
+{"kind": "book_delta", "ts": 1.5, "symbol": "BTC", "side": "bid", "price": 100.5, "size": 0.5}
+{"kind": "trade", "ts": 2.0, "symbol": "BTC", "price": 100.5, "size": 0.5, "aggressor_side": "SELL"}
+{"kind": "funding", "ts": 3.0, "symbol": "BTC", "rate_bps_per_8h": 1.5}
+{"kind": "trade", "ts": 4.0, "symbol": "ETH", "price": 3000.0, "size": 1.0, "aggressor_side": "BUY"}

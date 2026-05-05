@@ -281,16 +281,15 @@ class MomentumBot:
             config.tp_bps = 80.0         # fallback if ATR missing
             config.sl_bps = 40.0
         elif exchange == "nado":
-            # SLOW preset + FULL UNIVERSE (2026-04-24, refined 2026-04-27).
-            # max_positions reduced 5 → 2 because Nado's $100 min_notional floor
-            # overrides size_pct, forcing every position to be $100 regardless
-            # of the configured percent. With $25-35 account at 10x = $250-350
-            # buying power, 5 × $100 = $500 deployed = exceeds buying power and
-            # caused stuck/over-leveraged positions. 2 × $100 = $200 ≈ 60-80%
-            # of buying power, which is the headroom we want.
+            # SLOW preset + FULL UNIVERSE. max_positions = 1 because Nado's
+            # $100 min_notional floor overrides size_pct, so every position is
+            # $100. With ~$20 equity × 10x = $200 buying power, 2 positions =
+            # 100% utilization which Nado's account-health check rejects (saw
+            # rejection loop on LIT 2026-04-30, while ONDO already held a slot).
+            # 1 position ≈ 50% utilization leaves health headroom.
             config.min_notional = 100.0
             config.leverage = 10.0
-            config.max_positions = 2          # ↓ from 5 — fits buying power on small account
+            config.max_positions = 1          # ↓ from 2 — must leave health headroom
             config.size_pct = 6.0             # mostly inert because of min_notional floor
             config.max_hold_minutes = 480.0
             config.score_min = 3.5

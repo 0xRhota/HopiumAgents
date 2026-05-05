@@ -594,6 +594,13 @@ class HibachiSDK:
                 logger.error(f"Cannot create order: contract ID not found for {symbol}")
                 return None
 
+            # Round price to tickSize. Without this, sub-tick prices like 79160.2265
+            # for BTC (tick=0.1) get rejected with "Price ... is not a multiple of
+            # tick size". Affects every symbol with tickSize > 0.0001.
+            tick_size = float(market_info.get("tickSize", 0) or 0)
+            if tick_size > 0:
+                price = round(round(price / tick_size) * tick_size, 10)
+
             # Generate nonce
             nonce = int(time.time() * 1000)
 
