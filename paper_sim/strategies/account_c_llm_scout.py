@@ -156,14 +156,16 @@ class AccountCLLMScout(Strategy):
         funding_summary = []
         for sym in self.config.universe:
             f = market.funding.get((self.config.venue, sym))
-            book = market.books.get((self.config.venue, sym))
-            if f is None or book is None:
+            if f is None:
                 continue
+            book = market.books.get((self.config.venue, sym))
+            # Include the symbol whenever funding is known; mid/spread are
+            # nullable so transient missing books don't blank the briefing.
             funding_summary.append({
                 "symbol": sym,
                 "funding_bps_per_8h": f.rate_bps_per_8h,
-                "mid": book.mid,
-                "spread_bps": book.spread_bps,
+                "mid": book.mid if book else None,
+                "spread_bps": book.spread_bps if book else None,
             })
 
         # Compute 24h price changes per symbol from 1h candle history.

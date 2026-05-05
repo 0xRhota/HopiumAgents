@@ -200,6 +200,10 @@ class PaperRunner:
 
         self._last_decision_ts: float = 0.0
         self._closed = False
+        # Per-event-type counters for periodic diagnostics
+        self._event_counts = {"BookFullSnapshot": 0, "BookDelta": 0,
+                              "TradeTick": 0, "FundingTick": 0}
+        self._last_event_count_log_ts: float = 0.0
 
     def _make_funding_lookup(self):
         def lookup(venue: str, symbol: str, ts: float) -> float:
@@ -246,6 +250,17 @@ class PaperRunner:
     def _handle_event(self, event: MarketEvent) -> None:
         if event.venue in self._recorders:
             self._recorders[event.venue].record(event)
+
+        # Periodic diagnostic — log event-type counters every 60s
+        ev_type = type(event).__name__
+        if ev_type in self._event_counts:
+            self._event_counts[ev_type] += 1
+        if event.ts - self._last_event_count_log_ts > 60.0:
+            self._last_event_count_log_ts = event.ts
+            logger.info(
+                f"[runner:{self.config.account}] event counts: {self._event_counts}; "
+                f"books={len(self._books)} fundings={len(self._fundings)}"
+            )
 
         if isinstance(event, BookFullSnapshot):
             book = self._get_book(event.venue, event.symbol)

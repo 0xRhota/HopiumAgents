@@ -41,7 +41,8 @@ class ParadexVenue(VenueClient):
         self._session = None
         self._closed = False
         self._funding_poll_task: Optional[asyncio.Task] = None
-        self._event_queue: asyncio.Queue = asyncio.Queue(maxsize=10_000)
+        # Queue must be created inside the running loop. Deferred to connect().
+        self._event_queue: Optional[asyncio.Queue] = None
 
     @property
     def venue(self) -> str:
@@ -53,6 +54,8 @@ class ParadexVenue(VenueClient):
             import websockets  # noqa: F401
         except ImportError as e:
             raise RuntimeError("websockets package required for ParadexVenue") from e
+        # Bind queue to the currently-running loop
+        self._event_queue = asyncio.Queue(maxsize=10_000)
         self._session = aiohttp.ClientSession()
 
     async def close(self) -> None:
@@ -96,8 +99,11 @@ class ParadexVenue(VenueClient):
                 self._funding_poll_task.cancel()
 
     async def _subscribe(self, ws, symbols: List[str]) -> None:
+        # Channel format reference: ParadexWebsocketChannel.ORDER_BOOK
+        # = "order_book.{market}.{feed_type}@15@{refresh_rate}"
+        # feed_type=snapshot, refresh_rate=100ms.
         for sym in symbols:
-            for channel in (f"order_book.{sym}.SNAPSHOT_15",
+            for channel in (f"order_book.{sym}.snapshot@15@100ms",
                             f"trades.{sym}"):
                 msg = {"jsonrpc": "2.0", "id": int(time.time() * 1000),
                        "method": "subscribe", "params": {"channel": channel}}

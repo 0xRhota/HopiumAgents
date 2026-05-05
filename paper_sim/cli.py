@@ -202,6 +202,16 @@ def main(argv=None):
     p_cal = sub.add_parser("calibrate", help="record live L2 for shadow-mode calibration")
     p_cal.add_argument("--duration", default="24h")
 
+    p_pf = sub.add_parser(
+        "preflight",
+        help="validate a venue connection delivers all event types")
+    p_pf.add_argument("--venue", required=True,
+                      choices=["paradex", "hyperliquid"])
+    p_pf.add_argument("--duration", default="90s")
+    p_pf.add_argument("--symbols", nargs="+",
+                      default=None,
+                      help="defaults to BTC/ETH/SOL of the venue")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "run":
@@ -210,6 +220,18 @@ def main(argv=None):
         _cmd_report(args.account)
     elif args.cmd == "calibrate":
         asyncio.run(_cmd_calibrate(_parse_duration(args.duration)))
+    elif args.cmd == "preflight":
+        from paper_sim.preflight import run_preflight
+        if args.venue == "paradex":
+            client = ParadexVenue()
+            symbols = args.symbols or ["BTC-USD-PERP", "ETH-USD-PERP", "SOL-USD-PERP"]
+        else:
+            client = HyperliquidVenue()
+            symbols = args.symbols or ["BTC", "ETH", "SOL"]
+        result = asyncio.run(run_preflight(
+            client, symbols, _parse_duration(args.duration)))
+        print(result.render())
+        sys.exit(0 if result.passed else 1)
 
 
 if __name__ == "__main__":

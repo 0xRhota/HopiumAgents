@@ -38,7 +38,8 @@ class HyperliquidVenue(VenueClient):
         self._session = None
         self._closed = False
         self._funding_poll_task: Optional[asyncio.Task] = None
-        self._event_queue: asyncio.Queue = asyncio.Queue(maxsize=10_000)
+        # Queue must be created inside the running loop. Deferred to connect().
+        self._event_queue: Optional[asyncio.Queue] = None
 
     @property
     def venue(self) -> str:
@@ -50,6 +51,7 @@ class HyperliquidVenue(VenueClient):
             import websockets  # noqa: F401
         except ImportError as e:
             raise RuntimeError("websockets package required for HyperliquidVenue") from e
+        self._event_queue = asyncio.Queue(maxsize=10_000)
         self._session = aiohttp.ClientSession()
 
     async def close(self) -> None:
