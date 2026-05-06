@@ -1,9 +1,14 @@
 """ParadexVenue — live L2 + trades + funding via Paradex WebSocket.
 
 Wraps Paradex JSON-RPC WebSocket subscriptions:
-  - orderbook.{market}.SNAPSHOT_15  (15-level depth, our top 15 → matches book max_levels)
+  - order_book.{market}.snapshot@15@100ms  (15-level depth, 100ms refresh)
   - trades.{market}
   - markets_summary  (funding rate, periodic REST poll)
+
+L2 message shape (data field):
+  - update_type: "s" (snapshot) | "d" (delta)
+  - inserts/updates/deletes: list of {side: "BUY"|"SELL", price: str, size: str}
+The runner converts BUY→bid and SELL→ask in the BookSnapshot/BookDelta.
 
 Connection lifecycle: connect() opens WS + warms initial book; stream() yields events.
 On disconnect, reconnects with exponential backoff and resyncs book.
@@ -126,13 +131,55 @@ class ParadexVenue(VenueClient):
         symbol = sym_part[1]
 
         if channel.startswith("order_book."):
-            bids = tuple((float(p), float(s))
-                         for p, s in data.get("bids", []) or [])
-            asks = tuple((float(p), float(s))
-                         for p, s in data.get("asks", []) or [])
-            await self._event_queue.put(BookFullSnapshot(
-                ts=ts, venue=self.venue, symbol=symbol,
-                bids=bids, asks=asks))
+            # Paradex L2 message shape:
+            #   data.update_type ∈ {"s","d"}  (s = snapshot, d = delta)
+            #   data.inserts  → list of {side: "BUY"|"SELL", price: str, size: str}
+            #   data.updates  → same shape (price level size changes)
+            #   data.deletes  → same shape (size==0; remove)
+            update_type = data.get("update_type", "s")
+            inserts = data.get("inserts") or []
+            updates = data.get("updates") or []
+            deletes = data.get("deletes") or []
+
+            if update_type == "s":
+                # Snapshot — assemble full book from inserts
+                bids: List[tuple] = []
+                asks: List[tuple] = []
+                for lvl in inserts:
+                    side = lvl.get("side", "").upper()
+                    try:
+                        p = float(lvl["price"])
+                        s = float(lvl["size"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if side == "BUY":
+                        bids.append((p, s))
+                    elif side == "SELL":
+                        asks.append((p, s))
+                await self._event_queue.put(BookFullSnapshot(
+                    ts=ts, venue=self.venue, symbol=symbol,
+                    bids=tuple(bids), asks=tuple(asks)))
+            else:
+                # Delta — emit BookDelta per level for each kind
+                for kind, levels in (
+                    ("upsert", inserts), ("upsert", updates), ("delete", deletes)
+                ):
+                    for lvl in levels:
+                        side_str = lvl.get("side", "").upper()
+                        try:
+                            p = float(lvl["price"])
+                            s = 0.0 if kind == "delete" else float(lvl["size"])
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        # BookDelta uses 'bid'/'ask' (lowercase) per our schema
+                        side_lc = "bid" if side_str == "BUY" else \
+                                  "ask" if side_str == "SELL" else None
+                        if side_lc is None:
+                            continue
+                        await self._event_queue.put(BookDelta(
+                            ts=ts, venue=self.venue, symbol=symbol,
+                            side=side_lc, price=p, size=s,
+                        ))
         elif channel.startswith("trades."):
             for trade in data.get("trades", []) or [data]:
                 if not isinstance(trade, dict):
